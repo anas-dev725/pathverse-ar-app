@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "pathverse-ar",
+    "slug": "pathverse-ar",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pathverse.ar",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Pathverse AR requires camera access to scan room numbers and display 3D augmented reality arrows.",
+        "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos",
+        "NSPhotoLibraryAddUsageDescription": "Allow $(PRODUCT_NAME) to save photos",
+        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to use your microphone"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.INTERNET"
+      ],
+      "package": "com.pathverse.ar"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      "@reactvision/react-viro",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Pathverse AR needs camera access to scan room numbers."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4289531b-c41f-407e-8ead-1ee910698dd9"
+      }
+    }
+  }
+}
