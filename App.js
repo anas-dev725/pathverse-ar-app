@@ -289,6 +289,7 @@ export default function App() {
               ]
             );
           }}
+          onReturnHome={handleStop}
         />
       )}
     </View>

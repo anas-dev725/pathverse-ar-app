@@ -1213,15 +1213,15 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   textLabel: {
-    color: '#64748B', fontSize: 11, fontWeight: '800',
-    fontFamily: FONT_TITLE, letterSpacing: 1.5,
+    color: '#64748B', fontSize: 11, fontWeight: '700',
+    fontFamily: FONT_BODY, letterSpacing: 1.2,
     textTransform: 'uppercase', marginBottom: 8,
   },
   formInputContainer: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#F8FAFC', borderRadius: 14,
     borderWidth: 1.5, borderColor: '#E2E8F0',
-    paddingHorizontal: 14, paddingVertical: 12,
+    paddingHorizontal: 16, paddingVertical: 14,
   },
   formInputContainerFocused: {
     borderColor: '#2979FF',

@@ -177,7 +177,7 @@ const NavigationRouteScene = ({ sceneNavigator }) => {
 };
 
 // ── Outer component: HUD + voice + re-localization ──────────────────────────
-export default function ARNavigationScreen({ routeNodes, anchorNode, onStop }) {
+export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onReturnHome }) {
   const viewShotRef   = useRef(null);
   const relocRunning  = useRef(false);
   const rerenderScene = useRef(null);
@@ -343,6 +343,16 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop }) {
 
 
   const dest = routeNodes?.[routeNodes.length - 1];
+  const startNode = routeNodes?.[0];
+
+  // Dynamically calculate stats for the arrival success modal
+  const walkSpeed = 1.2; // 1.2 meters per second
+  const timeSeconds = Math.round(parseFloat(totalRouteDistance || '0') / walkSpeed) || 5;
+  const timeString = timeSeconds >= 60 
+    ? `${Math.floor(timeSeconds / 60)}m ${timeSeconds % 60}s` 
+    : `${timeSeconds}s`;
+  const xpEarned = Math.max(10, Math.round(parseFloat(totalRouteDistance || '0') * 0.5) + 5);
+  const stepsTaken = Math.round(parseFloat(totalRouteDistance || '0') * 1.35) || 8;
 
   return (
     <View style={styles.container}>
@@ -417,39 +427,66 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop }) {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalIconWrap}>
-              <Ionicons name="flag" size={40} color="#fff" />
+              <Ionicons name="trophy" size={38} color="#fff" />
             </View>
-            <Text style={styles.modalTitle}>Destination Reached!</Text>
-            <Text style={styles.modalSub}>You have arrived at {dest?.name}.</Text>
+            <Text style={styles.modalTitle}>Arrived Successfully!</Text>
+            <Text style={styles.modalSub}>You have completed your campus route.</Text>
 
-            <View style={styles.statsCard}>
-              <View style={styles.statBox}>
-                <Text style={styles.statVal}>
-                  {totalRouteDistance}<Text style={{ fontSize: 14, color: '#A0B0B9' }}> m</Text>
-                </Text>
-                <Text style={styles.statLabel}>Total Distance</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statBox}>
-                <Text style={styles.statVal}>{routeNodes?.length || 0}</Text>
-                <Text style={styles.statLabel}>Nodes Crossed</Text>
-              </View>
-            </View>
-
-            <Text style={styles.routeHeader}>ROUTE COVERED</Text>
-            <ScrollView style={styles.routeList} showsVerticalScrollIndicator={false}>
-              {routeNodes?.map((node, i) => (
-                <View key={node.id} style={styles.routeItem}>
-                  <View style={[styles.routeDot, i === routeNodes.length - 1 && styles.routeDotFinal]} />
-                  {i !== routeNodes.length - 1 && <View style={styles.routeLine} />}
-                  <Text style={[styles.routeTxt, i === routeNodes.length - 1 && styles.routeTxtFinal]}>
-                    {node.name}
-                  </Text>
+            {/* Visual Route Flow */}
+            <View style={styles.routeFlowCard}>
+              <View style={styles.routeFlowRow}>
+                {/* Start Node */}
+                <View style={styles.flowNodeWrap}>
+                  <View style={[styles.flowIconCircle, { borderColor: '#00e5ff' }]}>
+                    <Ionicons name="location-outline" size={16} color="#00e5ff" />
+                  </View>
+                  <Text style={styles.flowLabel}>START</Text>
+                  <Text style={styles.flowNodeName} numberOfLines={1}>{startNode?.name || 'Start Point'}</Text>
                 </View>
-              ))}
-            </ScrollView>
 
-            <TouchableOpacity style={styles.finishBtn} onPress={onStop}>
+                {/* Connecting Path Arrow */}
+                <View style={styles.flowConnectorCol}>
+                  <Text style={styles.flowConnectorDist}>{totalRouteDistance}m</Text>
+                  <View style={styles.flowConnectorLineWrap}>
+                    <View style={styles.flowConnectorDot} />
+                    <View style={styles.flowConnectorLine} />
+                    <Ionicons name="chevron-forward" size={12} color="rgba(255, 255, 255, 0.4)" style={{ marginLeft: -4 }} />
+                  </View>
+                </View>
+
+                {/* Destination Node */}
+                <View style={styles.flowNodeWrap}>
+                  <View style={[styles.flowIconCircle, { borderColor: '#2ecc71' }]}>
+                    <Ionicons name="flag-outline" size={16} color="#2ecc71" />
+                  </View>
+                  <Text style={styles.flowLabel}>DESTINATION</Text>
+                  <Text style={styles.flowNodeName} numberOfLines={1}>{dest?.name || 'Destination'}</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Expanded Gamified Stat Grid */}
+            <View style={styles.successStatsGrid}>
+              <View style={styles.successStatCard}>
+                <Ionicons name="time-outline" size={18} color="#00e5ff" style={{ marginBottom: 4 }} />
+                <Text style={styles.successStatVal}>{timeString}</Text>
+                <Text style={styles.successStatLabel}>Duration</Text>
+              </View>
+
+              <View style={styles.successStatCard}>
+                <Ionicons name="sparkles-outline" size={18} color="#2ecc71" style={{ marginBottom: 4 }} />
+                <Text style={styles.successStatVal}>+{xpEarned} XP</Text>
+                <Text style={styles.successStatLabel}>Level Reward</Text>
+              </View>
+
+              <View style={styles.successStatCard}>
+                <Ionicons name="footsteps-outline" size={18} color="#f39c12" style={{ marginBottom: 4 }} />
+                <Text style={styles.successStatVal}>{stepsTaken}</Text>
+                <Text style={styles.successStatLabel}>Steps Taken</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.finishBtn} onPress={onReturnHome || onStop}>
               <Text style={styles.finishBtnTxt}>Return to Home</Text>
             </TouchableOpacity>
           </View>
@@ -517,27 +554,105 @@ const styles = StyleSheet.create({
   modalTitle: { color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 8 },
   modalSub: { color: '#A0B0B9', fontSize: 14, textAlign: 'center', marginBottom: 24 },
 
-  statsCard: {
-    flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 16, paddingVertical: 18, paddingHorizontal: 20,
-    width: '100%', justifyContent: 'space-around', marginBottom: 24,
+  routeFlowCard: {
+    width: '100%',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    padding: 16,
+    marginBottom: 20,
   },
-  statBox: { alignItems: 'center' },
-  statVal: { color: '#4db8ff', fontSize: 28, fontWeight: '900' },
-  statLabel: { color: '#607D8B', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginTop: 4, letterSpacing: 1 },
-  statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.1)', alignSelf: 'stretch' },
+  routeFlowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  flowNodeWrap: {
+    alignItems: 'center',
+    flex: 1.2,
+  },
+  flowIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    marginBottom: 6,
+  },
+  flowLabel: {
+    color: '#607D8B',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  flowNodeName: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+    width: '100%',
+  },
+  flowConnectorCol: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  flowConnectorDist: {
+    color: '#00e5ff',
+    fontSize: 11,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  flowConnectorLineWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    justifyContent: 'center',
+  },
+  flowConnectorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.4)',
+  },
+  flowConnectorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
 
-  routeHeader: { alignSelf: 'flex-start', color: '#607D8B', fontSize: 11, fontWeight: '800', letterSpacing: 1.5, marginBottom: 12 },
-  routeList: { width: '100%', maxHeight: 160, marginBottom: 24 },
-  routeItem: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
-  routeDot: {
-    width: 12, height: 12, borderRadius: 6, borderWidth: 2,
-    borderColor: '#4db8ff', backgroundColor: '#071428', marginRight: 14, marginTop: 4, zIndex: 2,
+  successStatsGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    width: '100%',
+    marginBottom: 24,
   },
-  routeDotFinal: { borderColor: '#2ecc71', backgroundColor: '#2ecc71' },
-  routeLine: { position: 'absolute', left: 5, top: 18, height: 24, width: 2, backgroundColor: 'rgba(77,184,255,0.3)', zIndex: 1 },
-  routeTxt: { color: '#A0B0B9', fontSize: 15, fontWeight: '500', flex: 1, paddingBottom: 16 },
-  routeTxtFinal: { color: '#fff', fontWeight: '700' },
+  successStatCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successStatVal: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+    marginVertical: 2,
+  },
+  successStatLabel: {
+    color: '#607D8B',
+    fontSize: 10,
+    fontWeight: '700',
+  },
 
   finishBtn: {
     backgroundColor: '#4db8ff', width: '100%', borderRadius: 16, paddingVertical: 16,
