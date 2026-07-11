@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { getAllNodes, getAllEdges, addEdge, getOCRLogs } from '../database/database';
+import { getAllNodes, getAllEdges, addEdge, getOCRLogs, clearOCRLogs } from '../database/database';
 
 // Helper — compute Euclidean distance for a default edge weight
 const distBetween = (a, b) => {
@@ -23,10 +23,14 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
   const [error, setError]  = useState('');
   const [success, setSucc] = useState('');
 
+  const [ocrLogs, setOcrLogs] = useState([]);
+
   const refresh = () => {
     setNodes(getAllNodes());
     setEdges(getAllEdges());
-    setOcrCount(getOCRLogs().length);
+    const logs = getOCRLogs();
+    setOcrLogs(logs);
+    setOcrCount(logs.length);
   };
   useEffect(() => { refresh(); }, []);
 
@@ -62,9 +66,6 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
               <Text style={styles.titleSmall}>DEVELOPER TOOLS</Text>
               <Text style={styles.title}>Data Core</Text>
             </View>
-            <TouchableOpacity style={styles.closeBtn} onPress={onBack}>
-              <Ionicons name="close" size={20} color="#fff" />
-            </TouchableOpacity>
           </View>
 
           {/* AR Mapper button */}
@@ -73,15 +74,7 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
             <Text style={styles.mapperBtnTxt}>Boot Live AR Root Mapper</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.ocrLogBtn} onPress={onOpenOCRLog}>
-            <Ionicons name="camera-outline" size={18} color="#4db8ff" style={{ marginRight: 8 }} />
-            <Text style={styles.ocrLogBtnTxt}>View OCR Scan Log</Text>
-            {ocrCount > 0 && (
-              <View style={styles.ocrBadge}>
-                <Text style={styles.ocrBadgeTxt}>{ocrCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          {/* Boot Live AR Root Mapper */}
 
           {/* ── LocationNodes ── */}
           <View style={styles.section}>
@@ -178,6 +171,55 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
             )}
           </View>
 
+          {/* ── Camera Calibration Logs (Moved from Dashboard) ── */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Camera Calibration Logs</Text>
+              {ocrLogs.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => {
+                    Alert.alert(
+                      'Clear Calibration Logs?',
+                      'This will delete all camera scan text logs.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Clear All', style: 'destructive', onPress: () => { clearOCRLogs(); refresh(); } }
+                      ]
+                    );
+                  }}
+                  style={{ marginRight: 12 }}
+                >
+                  <Text style={{ color: '#ff4d4d', fontSize: 13, fontWeight: '700' }}>CLEAR</Text>
+                </TouchableOpacity>
+              )}
+              <View style={styles.countBadge}><Text style={styles.countTxt}>{ocrLogs.length}</Text></View>
+            </View>
+            {ocrLogs.map(item => {
+              const matched = item.matched_name?.trim();
+              const d = new Date(item.timestamp);
+              const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return (
+                <View key={item.id} style={styles.dataRow}>
+                  <Ionicons
+                    name={matched ? "checkmark-circle-outline" : "alert-circle-outline"}
+                    size={16}
+                    color={matched ? "#2ecc71" : "#ff4d4d"}
+                    style={{ marginRight: 8 }}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.nodeName}>{matched ? matched : "Unconfirmed Scan"}</Text>
+                    <Text style={styles.nodeSub}>
+                      OCR: "{item.raw_text?.trim() || '(no text)'}" · {timeStr}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+            {ocrLogs.length === 0 && (
+              <Text style={styles.emptyTxt}>No calibration scans logged yet.</Text>
+            )}
+          </View>
+
           <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -187,7 +229,7 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  scroll: { paddingHorizontal: 20, paddingTop: 55, paddingBottom: 20 },
+  scroll: { paddingHorizontal: 20, paddingTop: 55, paddingBottom: 115 },
 
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   titleSmall: { color: '#4db8ff', fontSize: 10, fontWeight: '800', letterSpacing: 2.5, marginBottom: 4 },

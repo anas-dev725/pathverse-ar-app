@@ -50,38 +50,36 @@ const CHEVRON_SPACING = 0.5; // Denser sequence for a solid "runway" look
 
 const interpolateChevrons = (worldPos) => {
   const chevrons = [];
-  let distLeft = CHEVRON_SPACING / 2; // place first arrow slightly forward
+  let distLeft = CHEVRON_SPACING / 2;
 
   for (let i = 0; i < worldPos.length - 1; i++) {
     const from = worldPos[i];
     const to = worldPos[i + 1];
     
     const dx = to[0] - from[0];
+    const dy = to[1] - from[1];
     const dz = to[2] - from[2];
     const segLen = Math.sqrt(dx * dx + dz * dz);
     
     if (segLen < 0.01) continue;
     
-    // Direction vector for this segment
-    const dirX = dx / segLen;
-    const dirZ = dz / segLen;
     // Rotation perfectly facing the geometric path segment
-    const angleDeg = Math.atan2(-dirX, -dirZ) * (180 / Math.PI);
+    const angleDeg = Math.atan2(-dx, -dz) * (180 / Math.PI);
 
     let walked = 0;
     while (walked + distLeft <= segLen) {
       walked += distLeft;
+      const t = walked / segLen;
       chevrons.push({
         pos: [
-          from[0] + dirX * walked,
-          -1.2,              // Slightly higher than previous for better floor visibility
-          from[2] + dirZ * walked
+          from[0] + dx * t,
+          from[1] + dy * t, // Smooth vertical interpolation (rising/sloping ramps)
+          from[2] + dz * t
         ],
         rotY: angleDeg
       });
-      distLeft = CHEVRON_SPACING; // demand exact spacing for next arrow
+      distLeft = CHEVRON_SPACING;
     }
-    // Carry over remaining distance to ensure identical spacing around corners
     distLeft -= (segLen - walked); 
   }
   
@@ -99,7 +97,8 @@ const NavigationRouteScene = ({ sceneNavigator }) => {
   sceneNavigator.viroAppProps.rerender = () => setRenderKey(k => k + 1);
 
   const ox = _originOffset[0];
-  const oz = _originOffset[2];   // Instruction 3: only X and Z matter (floor plane)
+  const oy = _originOffset[1];
+  const oz = _originOffset[2];
 
   const nodes = _routeNodes;
   const anchor = _anchorNode;
@@ -112,14 +111,13 @@ const NavigationRouteScene = ({ sceneNavigator }) => {
     );
   }
 
-  // Instruction 3: Negative Z = forward. Map DB coords → AR world (subtract offset).
-  // If the nodes were populated with 'y' for depth (2D floor plan style), map it to AR Z-depth!
+  // Standardized 3D mapping: map DB coords directly to AR coordinates,
+  // making Y relative to the starting anchor node's height (shifted for floor level origin at -1.2).
   const worldPos = nodes.map(n => {
-    const rawZ = (n.z === 0 && n.y !== 0) ? -n.y : n.z;
     return [
       n.x - ox,
-      -1.2,          // Floor level origin
-      rawZ - oz,
+      (n.y - oy) - 1.2,
+      n.z - oz,
     ];
   });
 
@@ -241,27 +239,58 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop }) {
     const distIv = setInterval(() => {
       if (!_routeNodes.length) return;
       const finalDest = _routeNodes[_routeNodes.length - 1];
-      const destWorld = [finalDest.x - _originOffset[0], -0.7, finalDest.z - _originOffset[2]];
-      const dist = eucXZ(_cameraPos, destWorld);
-      setDistMeters(dist.toFixed(1));
+      const destWorld = [
+        finalDest.x - _originOffset[0],
+        (finalDest.y - _originOffset[1]) - 1.2,
+        finalDest.z - _originOffset[2]
+      ];
+
+      const dx = _cameraPos[0] - destWorld[0];
+      const dy = _cameraPos[1] - destWorld[1];
+      const dz = _cameraPos[2] - destWorld[2];
+      const distXZ = Math.sqrt(dx * dx + dz * dz);
+      const distY = Math.abs(dy);
+
+      // Display horizontal distance on the HUD when on the same floor, 
+      // but if the target is on a different floor (dy > 2.0m), show full 3D distance.
+      let displayDist = distXZ;
+      if (distY > 2.0) {
+        displayDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      setDistMeters(displayDist.toFixed(1));
 
       if (!warmupDone) return; // skip voice until user has had time to move
 
-      // Arrival check — within 1.5m of destination
-      if (!arrivedRef.current && dist < 1.5) {
+      // 3D Arrival check: horizontal distance < 1.5m and vertical elevation matches within 2m tolerance
+      if (!arrivedRef.current && distXZ < 1.5 && distY < 2.0) {
         arrivedRef.current = true;
         Speech.speak('You have reached your destination.', { language: 'en-US', rate: 0.92, pitch: 1.1 });
         setShowModal(true);
       }
 
-      // Intermediate node proximity — announce once per node, within 2m
+      // Intermediate node proximity — announce once per node, within 3D bounding box
       _routeNodes.forEach((node, i) => {
         if (i === 0) return; // skip anchor node itself
-        const nWorld = [node.x - _originOffset[0], -0.7, node.z - _originOffset[2]];
-        const d = eucXZ(_cameraPos, nWorld);
-        if (d < 2 && !announcedNodes.current.has(node.id)) {
+        const nWorld = [
+          node.x - _originOffset[0],
+          (node.y - _originOffset[1]) - 1.2,
+          node.z - _originOffset[2]
+        ];
+        const ndx = _cameraPos[0] - nWorld[0];
+        const ndy = _cameraPos[1] - nWorld[1];
+        const ndz = _cameraPos[2] - nWorld[2];
+        const ndistXZ = Math.sqrt(ndx * ndx + ndz * ndz);
+        const ndistY = Math.abs(ndy);
+
+        if (ndistXZ < 2.0 && ndistY < 2.0 && !announcedNodes.current.has(node.id)) {
           announcedNodes.current.add(node.id);
-          Speech.speak(`Approaching ${node.name}`, { language: 'en-US', rate: 0.95 });
+          // If the next node is a transition node (e.g. stairs) and we are changing elevation:
+          const prevNode = _routeNodes[i - 1];
+          if (node.type === 'stairs' && prevNode && Math.abs(node.y - prevNode.y) > 0.5) {
+            Speech.speak(`Approaching stairs. Prepare to transition to the next floor.`, { language: 'en-US', rate: 0.95 });
+          } else {
+            Speech.speak(`Approaching ${node.name}`, { language: 'en-US', rate: 0.95 });
+          }
         }
       });
     }, 300);

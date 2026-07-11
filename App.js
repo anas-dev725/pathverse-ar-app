@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, View, BackHandler, Alert } from 'react-native';
+import { StyleSheet, View, BackHandler, Alert, TouchableOpacity, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 
 // Database & Algorithms
-import { initDB, seedDummyData, getAllNodes, getAllEdges } from './src/database/database';
+import { initDB, seedDummyData, getAllNodes, getAllEdges, getUserProfile, addNavigationMetric } from './src/database/database';
 import { calculateAStarPath } from './src/services/AStarAlgorithm';
 
 // Screens
@@ -13,25 +14,31 @@ import ScannerScreen       from './src/screens/ScannerScreen';
 import ARNavigationScreen  from './src/screens/ARNavigationScreen';
 import DBViewerScreen      from './src/screens/DBViewerScreen';
 import ARMapperScreen      from './src/screens/ARMapperScreen';
-import OCRLogScreen        from './src/screens/OCRLogScreen';
+import DashboardScreen      from './src/screens/DashboardScreen';
+import FavoritesScreen     from './src/screens/FavoritesScreen';
 
 // Defines the back-navigation hierarchy for each screen
 const BACK_MAP = {
   SCANNER:   'HOME',
-  DB_VIEWER: 'HOME',
-  AR_MAPPER: 'DB_VIEWER',
-  OCR_LOG:   'DB_VIEWER',
+  AR_MAPPER: 'HOME', // returns to Settings tab
   AR:        null,
 };
 
 export default function App() {
   const [screen, setScreen]           = useState('SPLASH');
+  const [activeTab, setActiveTab]     = useState('NAVIGATE'); // 'NAVIGATE' | 'FAVORITES' | 'DASHBOARD' | 'SETTINGS'
   const [destination, setDestination] = useState(null);
   const [anchor, setAnchor]           = useState(null);
   const [route, setRoute]             = useState([]);
+  const [preselectedDest, setPreselectedDest] = useState(null);
 
   useEffect(() => {
-    try { initDB(); seedDummyData(); } catch (e) { console.error(e); }
+    try { 
+      initDB(); 
+      seedDummyData(); 
+    } catch (e) { 
+      console.error(e); 
+    }
   }, []);
 
   // ── Android hardware back button handler ─────────────────────────────────
@@ -40,7 +47,11 @@ export default function App() {
       const back = BACK_MAP[screen];
 
       if (screen === 'HOME' || screen === 'SPLASH') {
-        // At home — ask before exiting the app
+        if (screen === 'HOME' && activeTab !== 'NAVIGATE') {
+          setActiveTab('NAVIGATE');
+          return true; // consumed
+        }
+        // At home Navigate tab — ask before exiting the app
         Alert.alert(
           'Exit Pathverse AR?',
           'Are you sure you want to close the app?',
@@ -66,6 +77,9 @@ export default function App() {
       }
 
       if (back) {
+        if (back === 'HOME' && screen === 'AR_MAPPER') {
+          setActiveTab('SETTINGS');
+        }
         setScreen(back);
         return true; // consumed
       }
@@ -74,12 +88,20 @@ export default function App() {
     });
 
     return () => handler.remove();
-  }, [screen]);
+  }, [screen, activeTab]);
 
   // ── Screen transition handlers ───────────────────────────────────────────
   const handleSplashDone = () => setScreen('HOME');
 
-  const handleStartNavigation = () => setScreen('SCANNER');
+  const handleStartNavigation = () => {
+    setPreselectedDest(null);
+    setScreen('SCANNER');
+  };
+
+  const handleStartNavigationWithFavorite = (destNode) => {
+    setPreselectedDest(destNode);
+    setScreen('SCANNER');
+  };
 
   const handleAnchorFound = (anchorNode, dest) => {
     setAnchor(anchorNode);
@@ -96,12 +118,38 @@ export default function App() {
     setScreen('AR');
   };
 
+  const getPathDistance = (path) => {
+    if (!path || path.length < 2) return 0;
+    let dist = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const n1 = path[i];
+      const n2 = path[i + 1];
+      const dx = n1.x - n2.x;
+      const dy = n1.y - n2.y;
+      const dz = n1.z - n2.z;
+      dist += Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return dist;
+  };
+
   const handleStop = useCallback(() => {
+    try {
+      if (route && route.length >= 2) {
+        const dist = getPathDistance(route);
+        if (dist > 0) {
+          const startName = route[0].name || route[0].id;
+          const endName = route[route.length - 1].name || route[route.length - 1].id;
+          addNavigationMetric(dist, startName, endName);
+        }
+      }
+    } catch (e) {
+      console.error("Error logging path distance:", e);
+    }
     setScreen('HOME');
     setDestination(null);
     setAnchor(null);
     setRoute([]);
-  }, []);
+  }, [route]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -113,34 +161,118 @@ export default function App() {
       )}
 
       {screen === 'HOME' && (
-        <HomeScreen
-          onStartNavigation={handleStartNavigation} // to scanner
-          onManualStart={(anchor, dest) => handleAnchorFound(anchor, dest)} // bypass scanner directly
-          onDevMode={() => setScreen('DB_VIEWER')}
-        />
+        <View style={{ flex: 1 }}>
+          {/* Tab Screen Content */}
+          {activeTab === 'NAVIGATE' && (
+            <HomeScreen
+              onStartNavigation={handleStartNavigation} // to scanner
+              onManualStart={(anchor, dest) => handleAnchorFound(anchor, dest)} // bypass scanner directly
+              onDevMode={() => setActiveTab('SETTINGS')}
+            />
+          )}
+
+          {activeTab === 'FAVORITES' && (
+            <FavoritesScreen
+              onNavigateFavorite={handleStartNavigationWithFavorite}
+              onBack={() => setActiveTab('NAVIGATE')}
+            />
+          )}
+
+          {activeTab === 'DASHBOARD' && (
+            <DashboardScreen onBack={() => setActiveTab('NAVIGATE')} />
+          )}
+
+          {activeTab === 'SETTINGS' && (
+            <DBViewerScreen
+              onBack={() => setActiveTab('NAVIGATE')}
+              onOpenMapper={() => setScreen('AR_MAPPER')}
+              onOpenOCRLog={() => setActiveTab('DASHBOARD')}
+            />
+          )}
+
+          {/* Clean Floating Bottom Navigation Bar */}
+          <View style={styles.tabBarContainer}>
+            {/* Tab 1: Navigate */}
+            <TouchableOpacity
+              style={styles.tabItem}
+              activeOpacity={0.8}
+              onPress={() => setActiveTab('NAVIGATE')}
+            >
+              <Ionicons
+                name={activeTab === 'NAVIGATE' ? 'compass' : 'compass-outline'}
+                size={22}
+                color={activeTab === 'NAVIGATE' ? '#00e5ff' : 'rgba(255,255,255,0.4)'}
+              />
+              <Text style={[
+                styles.tabLabel,
+                activeTab === 'NAVIGATE' && styles.tabLabelActive
+              ]}>Navigate</Text>
+            </TouchableOpacity>
+
+            {/* Tab 2: Favorites */}
+            <TouchableOpacity
+              style={styles.tabItem}
+              activeOpacity={0.8}
+              onPress={() => setActiveTab('FAVORITES')}
+            >
+              <Ionicons
+                name={activeTab === 'FAVORITES' ? 'star' : 'star-outline'}
+                size={22}
+                color={activeTab === 'FAVORITES' ? '#00e5ff' : 'rgba(255,255,255,0.4)'}
+              />
+              <Text style={[
+                styles.tabLabel,
+                activeTab === 'FAVORITES' && styles.tabLabelActive
+              ]}>Favorites</Text>
+            </TouchableOpacity>
+
+            {/* Tab 3: Dashboard */}
+            <TouchableOpacity
+              style={styles.tabItem}
+              activeOpacity={0.8}
+              onPress={() => setActiveTab('DASHBOARD')}
+            >
+              <Ionicons
+                name={activeTab === 'DASHBOARD' ? 'stats-chart' : 'stats-chart-outline'}
+                size={22}
+                color={activeTab === 'DASHBOARD' ? '#00e5ff' : 'rgba(255,255,255,0.4)'}
+              />
+              <Text style={[
+                styles.tabLabel,
+                activeTab === 'DASHBOARD' && styles.tabLabelActive
+              ]}>Dashboard</Text>
+            </TouchableOpacity>
+
+            {/* Tab 4: Settings */}
+            <TouchableOpacity
+              style={styles.tabItem}
+              activeOpacity={0.8}
+              onPress={() => setActiveTab('SETTINGS')}
+            >
+              <Ionicons
+                name={activeTab === 'SETTINGS' ? 'settings' : 'settings-outline'}
+                size={22}
+                color={activeTab === 'SETTINGS' ? '#00e5ff' : 'rgba(255,255,255,0.4)'}
+              />
+              <Text style={[
+                styles.tabLabel,
+                activeTab === 'SETTINGS' && styles.tabLabelActive
+              ]}>Settings</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
 
       {screen === 'SCANNER' && (
         <ScannerScreen
           onAnchorFound={handleAnchorFound}
           onCancel={() => setScreen('HOME')}
-        />
-      )}
-
-      {screen === 'DB_VIEWER' && (
-        <DBViewerScreen
-          onBack={() => setScreen('HOME')}
-          onOpenMapper={() => setScreen('AR_MAPPER')}
-          onOpenOCRLog={() => setScreen('OCR_LOG')}
+          preselectedDestination={preselectedDest}
         />
       )}
 
       {screen === 'AR_MAPPER' && (
-        <ARMapperScreen onCancel={() => setScreen('DB_VIEWER')} />
-      )}
-
-      {screen === 'OCR_LOG' && (
-        <OCRLogScreen onBack={() => setScreen('DB_VIEWER')} />
+        <ARMapperScreen onCancel={() => { setScreen('HOME'); setActiveTab('SETTINGS'); }} />
       )}
 
       {screen === 'AR' && (
@@ -165,4 +297,40 @@ export default function App() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#020818' },
+  tabBarContainer: {
+    position: 'absolute',
+    bottom: 24,
+    left: 20,
+    right: 20,
+    height: 72,
+    borderRadius: 24,
+    backgroundColor: 'rgba(7, 20, 40, 0.95)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 12,
+    shadowColor: '#00e5ff',
+    shadowOpacity: 0.15,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  tabItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    height: '100%',
+  },
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.4)',
+    marginTop: 4,
+    letterSpacing: 0.5,
+  },
+  tabLabelActive: {
+    color: '#00e5ff',
+  },
 });

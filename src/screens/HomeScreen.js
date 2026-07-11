@@ -6,7 +6,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { fuzzySearchRooms } from '../services/SearchService';
-import { getAllNodes } from '../database/database';
+import { getAllNodes, getFavorites, addFavorite, removeFavorite, getUserProfile } from '../database/database';
 
 const { width: W } = Dimensions.get('window');
 const TYPE_ICONS = { room: 'school-outline', corridor: 'git-merge-outline', stairs: 'trending-up-outline', exit: 'exit-outline' };
@@ -14,6 +14,7 @@ const TYPE_COLOR = { room: '#4db8ff', corridor: '#f39c12', stairs: '#9b59b6', ex
 
 export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode }) {
   const [nodes, setNodes] = useState([]);
+  const [profileName, setProfileName] = useState('Explorer');
   
   // Navigation State
   const [startNode, setStartNode] = useState(null);
@@ -29,10 +30,54 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
   const headerY = useRef(new Animated.Value(-30)).current;
   const headerOp = useRef(new Animated.Value(0)).current;
 
+  const [favIds, setFavIds] = useState([]);
+
+  const loadFavs = () => {
+    try {
+      const list = getFavorites();
+      setFavIds(list.map(f => f.id));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const toggleFavorite = (itemId) => {
+    try {
+      const list = getFavorites();
+      const isFav = list.some(f => f.id === itemId);
+      if (isFav) {
+        removeFavorite(itemId);
+      } else {
+        addFavorite(itemId);
+      }
+      loadFavs();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  };
+
   useEffect(() => {
-    const all = getAllNodes().filter(n => Math.abs(n.x) > 0.001 || Math.abs(n.z) > 0.001 || n.name === 'Entrance'); 
+    const all = getAllNodes().filter(n => n.name && n.name.trim() !== ''); 
     setNodes(all);
     setResults(all);
+    loadFavs();
+
+    try {
+      const prof = getUserProfile();
+      if (prof && prof.name) {
+        setProfileName(prof.name);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
     Animated.parallel([
       Animated.timing(headerY,  { toValue: 0, duration: 600, useNativeDriver: true }),
       Animated.timing(headerOp, { toValue: 1, duration: 600, useNativeDriver: true }),
@@ -89,17 +134,13 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         
         <Animated.View style={{ opacity: headerOp, transform: [{ translateY: headerY }] }}>
-          {/* Brand Header */}
-          <View style={styles.headerRow}>
-            <Text style={styles.heroTitle}>Path<Text style={{color:'#fff'}}>verse</Text></Text>
-            <TouchableOpacity onPress={onDevMode} style={styles.devBtn}>
-               <Ionicons name="settings-outline" size={24} color="rgba(255,255,255,0.3)" />
-            </TouchableOpacity>
+          {/* Brand Header & Dynamic Greeting */}
+          <View style={styles.greetingHeaderWrap}>
+            <Text style={styles.navGreetingText}>{getGreeting()}, {profileName}</Text>
+            <Text style={styles.navSubGreetingText}>Welcome to Pathverse AR</Text>
           </View>
-          
-          <Text style={styles.heroSub}>Find your way around campus seamlessly.</Text>
 
-          <View style={{height: 20}}/>
+          <View style={{height: 10}}/>
 
           {/* Navigation Card */}
           <View style={styles.navCard}>
@@ -165,27 +206,49 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
           {(query ? results : nodes).filter(n => n.type === 'room' || n.type === 'exit').map((item, index) => {
             const color = TYPE_COLOR[item.type] || '#4db8ff';
             const icon  = TYPE_ICONS[item.type] || 'location-outline';
+            const isFav = favIds.includes(item.id);
             return (
-              <TouchableOpacity 
-                key={item.id} 
-                style={styles.roomCard} 
-                activeOpacity={0.75}
-                onPress={() => {
-                  setDestNode(item);
-                  if (!startNode) openPicker('START');
-                }}
-              >
-                <View style={[styles.cardIcon, { backgroundColor: `${color}22`, borderColor: `${color}44` }]}>
-                  <Ionicons name={icon} size={22} color={color} />
-                </View>
-                <View style={styles.cardBody}>
-                  <Text style={styles.cardTitle}>{item.name}</Text>
-                  <Text style={styles.cardSub}>IoBM · {item.type}</Text>
-                </View>
-                <View style={styles.arrowCircle}>
+              <View key={item.id} style={styles.roomCardRow}>
+                <TouchableOpacity 
+                  style={styles.roomCardBody} 
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    setDestNode(item);
+                    if (!startNode) openPicker('START');
+                  }}
+                >
+                  <View style={[styles.cardIcon, { backgroundColor: `${color}22`, borderColor: `${color}44` }]}>
+                    <Ionicons name={icon} size={22} color={color} />
+                  </View>
+                  <View style={styles.cardBody}>
+                    <Text style={styles.cardTitle}>{item.name}</Text>
+                    <Text style={styles.cardSub}>IoBM · {item.type}</Text>
+                  </View>
+                </TouchableOpacity>
+
+                {/* Star bookmark toggle */}
+                <TouchableOpacity
+                  style={styles.starCardBtn}
+                  onPress={() => toggleFavorite(item.id)}
+                  hitSlop={{top:10, bottom:10, left:10, right:10}}
+                >
+                  <Ionicons 
+                    name={isFav ? 'star' : 'star-outline'} 
+                    size={22} 
+                    color={isFav ? '#00e5ff' : 'rgba(255,255,255,0.25)'} 
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={styles.arrowCircle}
+                  onPress={() => {
+                    setDestNode(item);
+                    if (!startNode) openPicker('START');
+                  }}
+                >
                   <Ionicons name="arrow-forward" size={15} color="#fff" />
-                </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
+              </View>
             );
           })}
 
@@ -224,17 +287,34 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
                 {results.map((item) => {
                   const color = TYPE_COLOR[item.type] || '#4db8ff';
                   const icon  = TYPE_ICONS[item.type] || 'location-outline';
+                  const isFav = favIds.includes(item.id);
                   return (
-                    <TouchableOpacity key={item.id} style={styles.listItem} onPress={() => selectNode(item)}>
-                      <View style={[styles.listIcon, { backgroundColor: `${color}22` }]}>
-                        <Ionicons name={icon} size={20} color={color} />
-                      </View>
-                      <View style={{flex:1}}>
-                        <Text style={styles.listName}>{item.name}</Text>
-                        <Text style={styles.listType}>{item.type}</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={18} color="#37474F" />
-                    </TouchableOpacity>
+                    <View key={item.id} style={styles.listItemRow}>
+                      <TouchableOpacity style={styles.listItemBody} onPress={() => selectNode(item)}>
+                        <View style={[styles.listIcon, { backgroundColor: `${color}22` }]}>
+                          <Ionicons name={icon} size={20} color={color} />
+                        </View>
+                        <View style={{flex:1}}>
+                          <Text style={styles.listName}>{item.name}</Text>
+                          <Text style={styles.listType}>{item.type}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      
+                      {/* Star Bookmark Icon Toggle */}
+                      <TouchableOpacity 
+                        style={styles.starToggleBtn} 
+                        onPress={() => toggleFavorite(item.id)}
+                        hitSlop={{top:10, bottom:10, left:10, right:10}}
+                      >
+                        <Ionicons 
+                          name={isFav ? 'star' : 'star-outline'} 
+                          size={20} 
+                          color={isFav ? '#00e5ff' : 'rgba(255,255,255,0.3)'} 
+                        />
+                      </TouchableOpacity>
+
+                      <Ionicons name="chevron-forward" size={18} color="#37474F" style={{marginLeft: 10}} />
+                    </View>
                   );
                 })}
                 <View style={{height:40}}/>
@@ -248,13 +328,24 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  scroll: { paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40 },
-  orb: { position: 'absolute', width: 300, height: 300, borderRadius: 150 },
+  scroll: { paddingHorizontal: 24, paddingTop: 40, paddingBottom: 110 },
   
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  devBtn: { padding: 4 },
-  heroTitle: { fontSize: 44, fontWeight: '900', color: '#4db8ff', letterSpacing: 0.5 },
-  heroSub: { fontSize: 16, color: '#A0B0B9', fontWeight: '500', marginTop: 8 },
+  greetingHeaderWrap: {
+    marginTop: 20,
+    marginBottom: 6,
+  },
+  navGreetingText: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#00e5ff',
+    fontFamily: Platform.OS === 'ios' ? 'System' : 'sans-serif-condensed',
+  },
+  navSubGreetingText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginTop: 2,
+  },
 
   navCard: {
     backgroundColor: 'rgba(255,255,255,0.06)',
@@ -262,6 +353,12 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
     padding: 8,
   },
+  orb: { position: 'absolute', width: 300, height: 300, borderRadius: 150 },
+  
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  devBtn: { padding: 4 },
+  heroTitle: { fontSize: 44, fontWeight: '900', color: '#4db8ff', letterSpacing: 0.5 },
+  heroSub: { fontSize: 16, color: '#A0B0B9', fontWeight: '500', marginTop: 8 },
   inputField: {
     flexDirection: 'row', alignItems: 'center',
     padding: 16, borderRadius: 16,
@@ -369,4 +466,46 @@ const styles = StyleSheet.create({
   listIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 16 },
   listName: { color: '#fff', fontSize: 16, fontWeight: '600', marginBottom: 4 },
   listType: { color: '#607D8B', fontSize: 12, textTransform: 'uppercase', fontWeight: '700' },
+
+  // Favorites layout addition
+  roomCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 20,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 12,
+    paddingRight: 14,
+    overflow: 'hidden',
+  },
+  roomCardBody: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+  },
+  starCardBtn: {
+    padding: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 6,
+  },
+  listItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+    paddingRight: 10,
+  },
+  listItemBody: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  starToggleBtn: {
+    padding: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 });

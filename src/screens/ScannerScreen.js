@@ -19,7 +19,7 @@ FileSystem.makeDirectoryAsync(SCAN_DIR, { intermediates: true }).catch(() => {})
 const { width: W, height: H } = Dimensions.get('window');
 const FRAME_SIZE = W * 0.72;
 
-export default function ScannerScreen({ onAnchorFound, onCancel }) {
+export default function ScannerScreen({ onAnchorFound, onCancel, preselectedDestination }) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef     = useRef(null);
   const viewShotRef   = useRef(null);
@@ -88,20 +88,20 @@ export default function ScannerScreen({ onAnchorFound, onCancel }) {
     let rawText = '';
 
     try {
-      // Use lightweight UI-layer frame capture instead of heavy Android hardware buffer ping
-      if (!viewShotRef.current) return;
-      const uri = await captureRef(viewShotRef, { format: 'jpg', quality: 0.5, result: 'tmpfile' });
-      
-      const filename = `scan_${Date.now()}.jpg`;
-      persistentUri = SCAN_DIR + filename;
-      await FileSystem.copyAsync({ from: uri, to: persistentUri });
+      if (!cameraRef.current) return;
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: true,
+      });
+      const uri = photo.uri;
+      persistentUri = uri;
 
-      const result = await TextRecognition.recognize(persistentUri);
+      const result = await TextRecognition.recognize(uri);
       rawText = result.blocks.map(b => b.text).join('\n');
 
       setScanCount(c => c + 1);
       const preview = rawText.trim().slice(0, 60);
-      setOcrDebug(preview || '');
+      setOcrDebug(preview || 'Analyzing…');
 
       const candidates = [
         ...result.blocks.map(b => b.text),
@@ -116,13 +116,32 @@ export default function ScannerScreen({ onAnchorFound, onCancel }) {
           const detected = matches[0];
           addOCRLog(persistentUri, rawText, detected.name);
 
+          setAnchor(detected);
+          setOcrDebug(`✓ ${detected.name}`);
+
+          if (preselectedDestination) {
+            Speech.speak(
+              `Location confirmed. ${detected.name} detected. Navigating to ${preselectedDestination.name}.`,
+              { language: 'en-US', rate: 0.93 }
+            );
+
+            // Success animation
+            Animated.parallel([
+              Animated.spring(successScale, { toValue: 1, friction: 4, useNativeDriver: true }),
+              Animated.timing(successOp,   { toValue: 1, duration: 250, useNativeDriver: true }),
+            ]).start();
+
+            setTimeout(() => {
+              successOp.setValue(0); successScale.setValue(0);
+              onAnchorFound(detected, preselectedDestination);
+            }, 1600);
+            return;
+          }
+
           Speech.speak(
             `Location confirmed. ${detected.name} detected. Where would you like to go?`,
             { language: 'en-US', rate: 0.93 }
           );
-
-          setAnchor(detected);
-          setOcrDebug(`✓ ${detected.name}`);
 
           // Success animation
           Animated.parallel([
@@ -144,6 +163,7 @@ export default function ScannerScreen({ onAnchorFound, onCancel }) {
 
       addOCRLog(persistentUri, rawText, '');
     } catch (e) {
+      console.error("Scanner OCR loop error:", e);
       if (persistentUri) addOCRLog(persistentUri, rawText, '');
     }
 

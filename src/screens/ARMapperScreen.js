@@ -159,7 +159,7 @@ export default function ARMapperScreen({ onCancel }) {
                 <View style={[styles.typeDot, { backgroundColor: n.type === 'room' ? '#4db8ff' : n.type === 'stairs' ? '#f39c12' : '#2ecc71' }]} />
                 <Text style={styles.listName}>{n.name}</Text>
                 <Text style={styles.listCoords}>
-                  ({n.x.toFixed(1)}, {n.z.toFixed(1)})
+                  ({n.x.toFixed(1)}, {n.y.toFixed(1)}, {n.z.toFixed(1)})
                 </Text>
               </View>
             ))}
