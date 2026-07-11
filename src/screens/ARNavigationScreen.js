@@ -11,7 +11,8 @@ import ViewShot, { captureRef } from 'react-native-view-shot';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import * as Speech from 'expo-speech';
 import { ocrSearchNodes } from '../services/SearchService';
-import { getAllNodes } from '../database/database';
+import { getAllNodes, getAllEdges } from '../database/database';
+import { calculateAStarPath } from '../services/AStarAlgorithm';
 
 // ── Materials ───────────────────────────────────────────────────────────────
 ViroMaterials.createMaterials({
@@ -325,6 +326,16 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
               det.z - _cameraPos[2],
             ];
             _anchorNode = det;
+
+            // Recalculate A* path dynamically from new scanned position to destination
+            if (dest) {
+              const edges = getAllEdges();
+              const newPath = calculateAStarPath(det.id, dest.id, allNodes, edges);
+              if (newPath && newPath.length >= 2) {
+                _routeNodes = newPath;
+              }
+            }
+
             // Flash purple banner
             setRelocStatus(`📡 Re-anchored: ${det.name}`);
             Animated.sequence([
@@ -339,7 +350,7 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
       }
     } catch (_) {}
     if (relocRunning.current) setTimeout(relocLoop, 3000);
-  }, []);
+  }, [dest]);
 
 
   const dest = routeNodes?.[routeNodes.length - 1];
