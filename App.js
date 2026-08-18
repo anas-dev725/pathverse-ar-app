@@ -13,6 +13,7 @@ import HomeScreen          from './src/screens/HomeScreen';
 import ScannerScreen       from './src/screens/ScannerScreen';
 import ARNavigationScreen  from './src/screens/ARNavigationScreen';
 import DBViewerScreen      from './src/screens/DBViewerScreen';
+import UserProfileScreen   from './src/screens/UserProfileScreen';
 import ARMapperScreen      from './src/screens/ARMapperScreen';
 import DashboardScreen      from './src/screens/DashboardScreen';
 import FavoritesScreen     from './src/screens/FavoritesScreen';
@@ -31,11 +32,22 @@ export default function App() {
   const [anchor, setAnchor]           = useState(null);
   const [route, setRoute]             = useState([]);
   const [preselectedDest, setPreselectedDest] = useState(null);
+  const [profile, setProfile]         = useState(null);
+
+  const fetchProfile = () => {
+    try {
+      const prof = getUserProfile();
+      setProfile(prof);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   useEffect(() => {
     try { 
       initDB(); 
       seedDummyData(); 
+      fetchProfile();
     } catch (e) { 
       console.error(e); 
     }
@@ -91,7 +103,10 @@ export default function App() {
   }, [screen, activeTab]);
 
   // ── Screen transition handlers ───────────────────────────────────────────
-  const handleSplashDone = () => setScreen('HOME');
+  const handleSplashDone = () => {
+    fetchProfile();
+    setScreen('HOME');
+  };
 
   const handleStartNavigation = () => {
     setPreselectedDest(null);
@@ -183,21 +198,32 @@ export default function App() {
           )}
 
           {activeTab === 'SETTINGS' && (
-            <DBViewerScreen
-              onBack={() => setActiveTab('NAVIGATE')}
-              onOpenMapper={() => setScreen('AR_MAPPER')}
-              onOpenOCRLog={() => setActiveTab('DASHBOARD')}
-            />
+            profile?.email === 'anasmobin0@gmail.com' ? (
+              <DBViewerScreen
+                onBack={() => setActiveTab('NAVIGATE')}
+                onOpenMapper={() => setScreen('AR_MAPPER')}
+                onOpenOCRLog={() => setActiveTab('DASHBOARD')}
+              />
+            ) : (
+              <UserProfileScreen
+                onBack={() => setActiveTab('NAVIGATE')}
+                onResetProfile={() => {
+                  setProfile(null);
+                  setScreen('SPLASH');
+                }}
+              />
+            )
           )}
 
-          {/* Clean Floating Bottom Navigation Bar */}
+          {/* Modern Floating Bottom Navigation Bar */}
           <View style={styles.tabBarContainer}>
             {/* Tab 1: Navigate */}
             <TouchableOpacity
               style={styles.tabItem}
-              activeOpacity={0.8}
+              activeOpacity={0.65}
               onPress={() => setActiveTab('NAVIGATE')}
             >
+              {activeTab === 'NAVIGATE' && <View style={styles.activeDot} />}
               <Ionicons
                 name={activeTab === 'NAVIGATE' ? 'compass' : 'compass-outline'}
                 size={22}
@@ -212,9 +238,10 @@ export default function App() {
             {/* Tab 2: Favorites */}
             <TouchableOpacity
               style={styles.tabItem}
-              activeOpacity={0.8}
+              activeOpacity={0.65}
               onPress={() => setActiveTab('FAVORITES')}
             >
+              {activeTab === 'FAVORITES' && <View style={styles.activeDot} />}
               <Ionicons
                 name={activeTab === 'FAVORITES' ? 'star' : 'star-outline'}
                 size={22}
@@ -229,9 +256,10 @@ export default function App() {
             {/* Tab 3: Dashboard */}
             <TouchableOpacity
               style={styles.tabItem}
-              activeOpacity={0.8}
+              activeOpacity={0.65}
               onPress={() => setActiveTab('DASHBOARD')}
             >
+              {activeTab === 'DASHBOARD' && <View style={styles.activeDot} />}
               <Ionicons
                 name={activeTab === 'DASHBOARD' ? 'stats-chart' : 'stats-chart-outline'}
                 size={22}
@@ -246,9 +274,10 @@ export default function App() {
             {/* Tab 4: Settings */}
             <TouchableOpacity
               style={styles.tabItem}
-              activeOpacity={0.8}
+              activeOpacity={0.65}
               onPress={() => setActiveTab('SETTINGS')}
             >
+              {activeTab === 'SETTINGS' && <View style={styles.activeDot} />}
               <Ionicons
                 name={activeTab === 'SETTINGS' ? 'settings' : 'settings-outline'}
                 size={22}
@@ -323,6 +352,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flex: 1,
     height: '100%',
+    position: 'relative',
+  },
+  activeDot: {
+    position: 'absolute',
+    top: 6,
+    width: 18,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: '#00e5ff',
+    shadowColor: '#00e5ff',
+    shadowOpacity: 0.8,
+    shadowRadius: 6,
+    elevation: 4,
   },
   tabLabel: {
     fontSize: 11,

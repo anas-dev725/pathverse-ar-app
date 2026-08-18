@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, View, Text, TextInput, TouchableOpacity,
-  Modal, Animated, Dimensions, ScrollView, KeyboardAvoidingView, Platform
+  Modal, Animated, Dimensions, ScrollView, FlatList, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -85,9 +85,15 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
   }, []);
 
   const openPicker = (type) => {
+    try {
+      const all = getAllNodes().filter(n => n && n.name && n.name.trim() !== ''); 
+      setNodes(all);
+      setResults(all);
+    } catch (e) {
+      console.error("Error refreshing nodes for search picker:", e);
+    }
     setPickerType(type);
     setQuery('');
-    setResults(nodes);
     setPickerVisible(true);
   };
 
@@ -100,17 +106,17 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
   const selectNode = (node) => {
     if (pickerType === 'START') {
       setStartNode(node);
-      // Auto-advance to destination if empty
       if (!destNode) {
         setPickerType('DEST');
         setQuery('');
         setResults(nodes);
-        return;
+      } else {
+        setPickerVisible(false);
       }
     } else {
       setDestNode(node);
+      setPickerVisible(false);
     }
-    setPickerVisible(false);
   };
 
   const handleStart = () => {
@@ -283,13 +289,20 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
                 />
               </View>
 
-              <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-                {results.map((item) => {
+              <FlatList
+                data={results}
+                keyExtractor={(item) => item.id}
+                initialNumToRender={12}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                showsVerticalScrollIndicator={false}
+                style={styles.list}
+                renderItem={({ item }) => {
                   const color = TYPE_COLOR[item.type] || '#4db8ff';
                   const icon  = TYPE_ICONS[item.type] || 'location-outline';
                   const isFav = favIds.includes(item.id);
                   return (
-                    <View key={item.id} style={styles.listItemRow}>
+                    <View style={styles.listItemRow}>
                       <TouchableOpacity style={styles.listItemBody} onPress={() => selectNode(item)}>
                         <View style={[styles.listIcon, { backgroundColor: `${color}22` }]}>
                           <Ionicons name={icon} size={20} color={color} />
@@ -299,26 +312,21 @@ export default function HomeScreen({ onStartNavigation, onManualStart, onDevMode
                           <Text style={styles.listType}>{item.type}</Text>
                         </View>
                       </TouchableOpacity>
-                      
-                      {/* Star Bookmark Icon Toggle */}
-                      <TouchableOpacity 
-                        style={styles.starToggleBtn} 
+                      <TouchableOpacity
+                        style={styles.starCardBtn}
                         onPress={() => toggleFavorite(item.id)}
                         hitSlop={{top:10, bottom:10, left:10, right:10}}
                       >
                         <Ionicons 
                           name={isFav ? 'star' : 'star-outline'} 
                           size={20} 
-                          color={isFav ? '#00e5ff' : 'rgba(255,255,255,0.3)'} 
+                          color={isFav ? '#00e5ff' : 'rgba(255,255,255,0.25)'} 
                         />
                       </TouchableOpacity>
-
-                      <Ionicons name="chevron-forward" size={18} color="#37474F" style={{marginLeft: 10}} />
                     </View>
                   );
-                })}
-                <View style={{height:40}}/>
-              </ScrollView>
+                }}
+              />
            </View>
         </KeyboardAvoidingView>
       </Modal>

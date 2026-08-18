@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, View, Text, ScrollView, TouchableOpacity,
-  TextInput, KeyboardAvoidingView, Platform, Alert
+  TextInput, KeyboardAvoidingView, Platform, Alert, InteractionManager, ActivityIndicator
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { getAllNodes, getAllEdges, addEdge, getOCRLogs, clearOCRLogs } from '../database/database';
+import { getAllNodes, getAllEdges, addEdge, getOCRLogs, clearOCRLogs, deleteNode, deleteEdge, getUniqueUserCount } from '../database/database';
 
 // Helper — compute Euclidean distance for a default edge weight
 const distBetween = (a, b) => {
@@ -17,22 +17,57 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
   const [nodes, setNodes]  = useState([]);
   const [edges, setEdges]  = useState([]);
   const [ocrCount, setOcrCount] = useState(0);
+  const [userCount, setUserCount] = useState(0);
   const [name1, setName1]  = useState('');
   const [name2, setName2]  = useState('');
   const [dist, setDist]    = useState('');
   const [error, setError]  = useState('');
   const [success, setSucc] = useState('');
+  const [loading, setLoading] = useState(true);
 
   const [ocrLogs, setOcrLogs] = useState([]);
 
   const refresh = () => {
-    setNodes(getAllNodes());
-    setEdges(getAllEdges());
-    const logs = getOCRLogs();
-    setOcrLogs(logs);
-    setOcrCount(logs.length);
+    InteractionManager.runAfterInteractions(() => {
+      try {
+        const n = getAllNodes() || [];
+        const e = getAllEdges() || [];
+        const logs = getOCRLogs() || [];
+        setNodes(n);
+        setEdges(e);
+        setOcrLogs(logs);
+        setOcrCount(logs.length);
+        setUserCount(getUniqueUserCount());
+      } catch (err) {
+        console.error("Error refreshing DB viewer:", err);
+      } finally {
+        setLoading(false);
+      }
+    });
   };
   useEffect(() => { refresh(); }, []);
+
+  const handleDeleteNode = (id, name) => {
+    Alert.alert('Delete Node', `Are you sure you want to delete "${name}"? This will also remove any connected edges.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => {
+          deleteNode(id);
+          refresh();
+        }
+      }
+    ]);
+  };
+
+  const handleDeleteEdge = (id, edgeNameText) => {
+    Alert.alert('Delete Edge', `Remove connection: ${edgeNameText}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => {
+          deleteEdge(id);
+          refresh();
+        }
+      }
+    ]);
+  };
 
   const handleCreateEdge = () => {
     setError(''); setSucc('');
@@ -74,6 +109,25 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
             <Text style={styles.mapperBtnTxt}>Boot Live AR Root Mapper</Text>
           </TouchableOpacity>
 
+          {/* Database Stats Dashboard Grid */}
+          <View style={styles.dbStatsContainer}>
+            <View style={styles.dbStatCard}>
+              <Ionicons name="people-outline" size={20} color="#4db8ff" />
+              <Text style={styles.dbStatValue}>{userCount}</Text>
+              <Text style={styles.dbStatLabel}>Registered Users</Text>
+            </View>
+            <View style={styles.dbStatCard}>
+              <Ionicons name="pin-outline" size={20} color="#2ecc71" />
+              <Text style={styles.dbStatValue}>{nodes.length}</Text>
+              <Text style={styles.dbStatLabel}>Location Nodes</Text>
+            </View>
+            <View style={styles.dbStatCard}>
+              <Ionicons name="git-branch-outline" size={20} color="#f39c12" />
+              <Text style={styles.dbStatValue}>{edges.length}</Text>
+              <Text style={styles.dbStatLabel}>Hallway Edges</Text>
+            </View>
+          </View>
+
           {/* Boot Live AR Root Mapper */}
 
           {/* ── LocationNodes ── */}
@@ -92,6 +146,9 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
                     {n.type}  ·  X {n.x.toFixed(2)}  Y {n.y.toFixed(2)}  Z {n.z.toFixed(2)}
                   </Text>
                 </View>
+                <TouchableOpacity onPress={() => handleDeleteNode(n.id, n.name)} style={{ padding: 12 }}>
+                  <Ionicons name="trash-outline" size={20} color="#ff4d4d" />
+                </TouchableOpacity>
               </View>
             ))}
             {nodes.length === 0 && <Text style={styles.emptyTxt}>No nodes saved yet. Use the AR Mapper.</Text>}
@@ -104,9 +161,14 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
               <View style={styles.countBadge}><Text style={styles.countTxt}>{edges.length}</Text></View>
             </View>
             {edges.map(e => (
-              <View key={e.id.toString()} style={styles.edgeRow}>
-                <Ionicons name="git-commit-outline" size={14} color="#4db8ff" style={{ marginRight: 8 }} />
-                <Text style={styles.edgeTxt}>{edgeName(e)}</Text>
+              <View key={e.id.toString()} style={[styles.edgeRow, { justifyContent: 'space-between' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                  <Ionicons name="git-commit-outline" size={14} color="#4db8ff" style={{ marginRight: 8 }} />
+                  <Text style={styles.edgeTxt}>{edgeName(e)}</Text>
+                </View>
+                <TouchableOpacity onPress={() => handleDeleteEdge(e.id, edgeName(e))} style={{ paddingHorizontal: 12, paddingVertical: 4 }}>
+                  <Ionicons name="trash-outline" size={18} color="#ff4d4d" />
+                </TouchableOpacity>
               </View>
             ))}
             {edges.length === 0 && <Text style={styles.emptyTxt}>No edges yet. Connect nodes below.</Text>}
@@ -276,4 +338,33 @@ const styles = StyleSheet.create({
   quickRow: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4 },
   quickChip: { margin: 4, backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   quickChipTxt: { color: '#A0B0B9', fontSize: 12, fontWeight: '600' },
+  dbStatsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 24,
+  },
+  dbStatCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dbStatValue: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+    marginTop: 6,
+    marginBottom: 2,
+  },
+  dbStatLabel: {
+    color: '#455A64',
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
 });

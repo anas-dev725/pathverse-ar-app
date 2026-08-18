@@ -26,7 +26,8 @@ export const initDB = () => {
       image_path TEXT,
       raw_text   TEXT,
       matched_name TEXT,
-      timestamp  TEXT
+      timestamp  TEXT,
+      user_email TEXT
     );
     CREATE TABLE IF NOT EXISTS UserProfile (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +37,9 @@ export const initDB = () => {
       created_at TEXT
     );
     CREATE TABLE IF NOT EXISTS Favorites (
-      node_id TEXT PRIMARY KEY,
+      node_id TEXT,
+      user_email TEXT,
+      PRIMARY KEY (node_id, user_email),
       FOREIGN KEY(node_id) REFERENCES LocationNodes(id)
     );
     CREATE TABLE IF NOT EXISTS NavigationMetrics (
@@ -44,15 +47,65 @@ export const initDB = () => {
       distance REAL,
       timestamp TEXT,
       start_name TEXT,
-      end_name TEXT
+      end_name TEXT,
+      user_email TEXT
     );
   `);
+
+  try {
+    db.execSync(`ALTER TABLE LocationNodes ADD COLUMN image_uri TEXT`);
+  } catch (e) {
+    // Column already exists or database is clean
+  }
 
   try {
     db.execSync(`ALTER TABLE UserProfile ADD COLUMN role TEXT`);
   } catch (e) {
     // Column already exists or database is clean
   }
+
+  try {
+    db.execSync(`ALTER TABLE UserProfile ADD COLUMN is_active INTEGER DEFAULT 0`);
+  } catch (e) {
+    // Column already exists or database is clean
+  }
+
+  // Schema Migrations for existing user databases
+  try {
+    const cols = db.getAllSync("PRAGMA table_info(Favorites)");
+    const hasEmail = cols.some(c => c.name === 'user_email');
+    if (!hasEmail) {
+      db.execSync(`ALTER TABLE Favorites RENAME TO Favorites_old`);
+      db.execSync(`
+        CREATE TABLE Favorites (
+          node_id TEXT,
+          user_email TEXT,
+          PRIMARY KEY (node_id, user_email),
+          FOREIGN KEY(node_id) REFERENCES LocationNodes(id)
+        )
+      `);
+      db.execSync(`INSERT INTO Favorites (node_id, user_email) SELECT node_id, 'guest' FROM Favorites_old`);
+      db.execSync(`DROP TABLE Favorites_old`);
+    }
+  } catch (e) {
+    console.error("Migration error for Favorites table:", e);
+  }
+
+  try {
+    const cols = db.getAllSync("PRAGMA table_info(OCRLog)");
+    const hasEmail = cols.some(c => c.name === 'user_email');
+    if (!hasEmail) {
+      db.execSync(`ALTER TABLE OCRLog ADD COLUMN user_email TEXT`);
+    }
+  } catch (e) {}
+
+  try {
+    const cols = db.getAllSync("PRAGMA table_info(NavigationMetrics)");
+    const hasEmail = cols.some(c => c.name === 'user_email');
+    if (!hasEmail) {
+      db.execSync(`ALTER TABLE NavigationMetrics ADD COLUMN user_email TEXT`);
+    }
+  } catch (e) {}
 
   try {
     const cols = db.getAllSync("PRAGMA table_info(NavigationMetrics)");
@@ -72,8 +125,12 @@ export const seedDummyData = () => {
   // Clear old seed nodes first so we overwrite with standardized 3D coordinates,
   // but protect user custom mapped landmarks (IDs starting with 'loc_')
   try {
-    db.runSync("DELETE FROM LocationNodes WHERE id NOT LIKE 'loc_%'");
+    // Delete any old custom nodes that match our new seeded ones to prevent duplicates
+    db.runSync("DELETE FROM LocationNodes WHERE name IN ('IT Main gate 1', 'Stairs 1 base', 'Stairs 1 midway', '1st floor', 'Room 204', 'Lab 4', 'Stairs 2 base', 'Lab 8', 'Lab 9', 'Lab 10')");
     db.runSync("DELETE FROM Edges WHERE node1_id NOT LIKE 'loc_%' AND node2_id NOT LIKE 'loc_%'");
+    db.runSync("DELETE FROM LocationNodes WHERE id NOT LIKE 'loc_%'");
+    // Clean up any orphaned edges referencing deleted node IDs
+    db.runSync("DELETE FROM Edges WHERE node1_id NOT IN (SELECT id FROM LocationNodes) OR node2_id NOT IN (SELECT id FROM LocationNodes)");
   } catch (e) {
     console.error("Error clearing old seed nodes:", e);
   }
@@ -109,9 +166,21 @@ export const seedDummyData = () => {
     { id: 'rlx', name: 'ROLEX', x: 0, y: 0.0, z: -4, type: 'room' },
 
     // ── EVALUATOR DEMO PATH ──
-    { id: 'it_gate', name: 'IT Main Gate', x: 0, y: 0.0, z: 0, type: 'room' },
-    { id: 'lift_1', name: 'The Lift', x: 0, y: 0.0, z: -12.5, type: 'corridor' },
-    { id: 'it_lab_1', name: 'IT Lab 1', x: -6.5, y: 0.0, z: -12.5, type: 'room' },
+    { id: 'it_gate', name: 'IT Main Gate', x: 0.0, y: 0.0, z: 0.0, type: 'room' },
+    { id: 'lift_1', name: 'The Lift', x: 0.0, y: 0.0, z: -12.5, type: 'corridor' },
+    { id: 'it_lab_1', name: 'IT Lab 1', x: 3.0, y: 0.0, z: -12.5, type: 'room' },
+
+    // ── REAL UNIVERSITY DEMO PATH (PHYSICAL CORRIDOR & LEFT RED-HANDRAIL STAIRCASE) ──
+    { id: 'it_main_gate_1', name: 'IT Main gate 1', x: 0.0, y: 0.0, z: 0.0, type: 'room' },
+    { id: 'stairs_1_base', name: 'Stairs 1 base', x: -2.5, y: 0.0, z: -12.5, type: 'stairs' },
+    { id: 'stairs_1_midway', name: 'Stairs 1 midway', x: -3.8, y: 2.0, z: -15.5, type: 'stairs' },
+    { id: 'first_floor', name: '1st floor', x: -2.5, y: 3.8, z: -12.5, type: 'corridor' },
+    { id: 'room_204', name: 'Room 204', x: 0.0, y: 3.8, z: -9.0, type: 'room' },
+    { id: 'lab_4', name: 'Lab 4', x: -4.5, y: 3.8, z: -10.0, type: 'room' },
+    { id: 'stairs_2_base', name: 'Stairs 2 base', x: -2.5, y: 3.8, z: -12.5, type: 'stairs' },
+    { id: 'lab_8', name: 'Lab 8', x: -4.5, y: 6.0, z: -17.0, type: 'room' },
+    { id: 'lab_9', name: 'Lab 9', x: -1.5, y: 6.0, z: -21.0, type: 'room' },
+    { id: 'lab_10', name: 'Lab 10', x: 3.5, y: 6.0, z: -18.0, type: 'room' },
   ];
 
   for (const node of nodes) {
@@ -144,9 +213,24 @@ export const seedDummyData = () => {
     // Additional test
     { a: 'bkt', b: 'rlx', d: 3.0 },
 
-    // Evaluator Demo path
+    // Evaluator Demo path & Interconnected Ground Floor Network
     { a: 'it_gate', b: 'lift_1', d: 12.5 },
     { a: 'lift_1', b: 'it_lab_1', d: 6.5 },
+    { a: 'it_gate', b: 'it_main_gate_1', d: 0.1 },
+    { a: 'it_main_gate_1', b: 'lift_1', d: 12.5 },
+    { a: 'stairs_1_base', b: 'lift_1', d: 0.5 },
+    { a: 'stairs_1_base', b: 'it_lab_1', d: 6.5 },
+
+    // pre-seeded connected path for User Screenshot
+    { a: 'it_main_gate_1', b: 'stairs_1_base', d: 12.32 },
+    { a: 'stairs_1_base', b: 'stairs_1_midway', d: 5.67 },
+    { a: 'stairs_1_midway', b: 'first_floor', d: 4.83 },
+    { a: 'first_floor', b: 'room_204', d: 3.50 },
+    { a: 'first_floor', b: 'lab_4', d: 2.73 },
+    { a: 'first_floor', b: 'stairs_2_base', d: 0.75 },
+    { a: 'stairs_2_base', b: 'lab_8', d: 7.72 },
+    { a: 'lab_8', b: 'lab_9', d: 5.78 },
+    { a: 'lab_8', b: 'lab_10', d: 11.69 },
   ];
 
   for (const edge of edges) {
@@ -165,11 +249,21 @@ export const getAllEdges = () => {
   return db.getAllSync('SELECT * FROM Edges');
 };
 
-export const addNode = (id, name, x, y, z, type) => {
+export const addNode = (id, name, x, y, z, type, image_uri = null) => {
   db.runSync(
-    `INSERT INTO LocationNodes (id, name, x, y, z, type) VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, name, x, y, z, type]
+    `INSERT INTO LocationNodes (id, name, x, y, z, type, image_uri) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, name, x, y, z, type, image_uri]
   );
+};
+
+export const deleteNode = (id) => {
+  try {
+    db.runSync(`DELETE FROM Edges WHERE node1_id = ? OR node2_id = ?`, [id, id]);
+    db.runSync(`DELETE FROM Favorites WHERE node_id = ?`, [id]);
+    db.runSync(`DELETE FROM LocationNodes WHERE id = ?`, [id]);
+  } catch (e) {
+    console.error("Error deleting node:", e);
+  }
 };
 
 export const addEdge = (node1_id, node2_id, distance) => {
@@ -179,46 +273,105 @@ export const addEdge = (node1_id, node2_id, distance) => {
   );
 };
 
-// ── OCR Audit Log ──────────────────────────────────────────────────────────
+export const deleteEdge = (id) => {
+  try {
+    db.runSync(`DELETE FROM Edges WHERE id = ?`, [id]);
+  } catch (e) {
+    console.error("Error deleting edge:", e);
+  }
+};
+
 export const addOCRLog = (imagePath, rawText, matchedName) => {
+  const email = getActiveUserEmail();
   const ts = new Date().toISOString();
   db.runSync(
-    `INSERT INTO OCRLog (image_path, raw_text, matched_name, timestamp) VALUES (?, ?, ?, ?)`,
-    [imagePath, rawText || '', matchedName || '', ts]
+    `INSERT INTO OCRLog (image_path, raw_text, matched_name, timestamp, user_email) VALUES (?, ?, ?, ?, ?)`,
+    [imagePath, rawText || '', matchedName || '', ts, email]
   );
 };
 
-export const getOCRLogs = () =>
-  db.getAllSync('SELECT * FROM OCRLog ORDER BY id DESC');
+export const getOCRLogs = () => {
+  try {
+    return db.getAllSync('SELECT * FROM OCRLog ORDER BY id DESC');
+  } catch (e) {
+    return [];
+  }
+};
 
-export const clearOCRLogs = () =>
-  db.execSync('DELETE FROM OCRLog');
+export const clearOCRLogs = () => {
+  try {
+    db.runSync('DELETE FROM OCRLog');
+  } catch (e) {
+    console.error("Error clearing OCR logs:", e);
+  }
+};
 
 export const saveUserProfile = (name, email, role) => {
   const ts = new Date().toISOString();
-  db.runSync(
-    `INSERT INTO UserProfile (name, email, role, created_at) VALUES (?, ?, ?, ?)`,
-    [name, email, role || 'student', ts]
-  );
+  try {
+    // Set all profiles to inactive
+    db.runSync(`UPDATE UserProfile SET is_active = 0`);
+    
+    // Check if profile already exists
+    const existing = db.getAllSync(`SELECT * FROM UserProfile WHERE email = ?`, [email]);
+    if (existing.length > 0) {
+      db.runSync(
+        `UPDATE UserProfile SET name = ?, role = ?, is_active = 1 WHERE email = ?`,
+        [name, role || 'student', email]
+      );
+    } else {
+      db.runSync(
+        `INSERT INTO UserProfile (name, email, role, is_active, created_at) VALUES (?, ?, ?, 1, ?)`,
+        [name, email, role || 'student', ts]
+      );
+    }
+  } catch (e) {
+    console.error("Error saving user profile:", e);
+  }
+};
+
+export const getUniqueUserCount = () => {
+  try {
+    const row = db.getAllSync('SELECT COUNT(DISTINCT email) as count FROM UserProfile');
+    return row.length > 0 ? row[0].count : 0;
+  } catch (e) {
+    return 0;
+  }
 };
 
 export const getUserProfile = () => {
   try {
-    const profiles = db.getAllSync('SELECT * FROM UserProfile ORDER BY id DESC LIMIT 1');
+    const profiles = db.getAllSync('SELECT * FROM UserProfile WHERE is_active = 1 ORDER BY id DESC LIMIT 1');
     return profiles.length > 0 ? profiles[0] : null;
   } catch (e) {
     return null;
   }
 };
 
+export const findProfileByEmail = (email) => {
+  try {
+    const profiles = db.getAllSync('SELECT * FROM UserProfile WHERE email = ? ORDER BY id DESC LIMIT 1', [email]);
+    return profiles.length > 0 ? profiles[0] : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+export const getActiveUserEmail = () => {
+  const profile = getUserProfile();
+  return profile ? profile.email : 'guest';
+};
+
 // ── Favorites / Bookmarks ──────────────────────────────────────────────────
 export const getFavorites = () => {
   try {
+    const email = getActiveUserEmail();
     return db.getAllSync(`
       SELECT n.* FROM LocationNodes n
       INNER JOIN Favorites f ON n.id = f.node_id
+      WHERE f.user_email = ?
       ORDER BY n.name ASC
-    `);
+    `, [email]);
   } catch (e) {
     console.error("Error fetching favorites:", e);
     return [];
@@ -227,7 +380,8 @@ export const getFavorites = () => {
 
 export const addFavorite = (nodeId) => {
   try {
-    db.runSync(`INSERT OR IGNORE INTO Favorites (node_id) VALUES (?)`, [nodeId]);
+    const email = getActiveUserEmail();
+    db.runSync(`INSERT OR IGNORE INTO Favorites (node_id, user_email) VALUES (?, ?)`, [nodeId, email]);
   } catch (e) {
     console.error("Error adding favorite:", e);
   }
@@ -235,7 +389,8 @@ export const addFavorite = (nodeId) => {
 
 export const removeFavorite = (nodeId) => {
   try {
-    db.runSync(`DELETE FROM Favorites WHERE node_id = ?`, [nodeId]);
+    const email = getActiveUserEmail();
+    db.runSync(`DELETE FROM Favorites WHERE node_id = ? AND user_email = ?`, [nodeId, email]);
   } catch (e) {
     console.error("Error removing favorite:", e);
   }
@@ -243,7 +398,8 @@ export const removeFavorite = (nodeId) => {
 
 export const isFavorite = (nodeId) => {
   try {
-    const row = db.getAllSync(`SELECT 1 FROM Favorites WHERE node_id = ? LIMIT 1`, [nodeId]);
+    const email = getActiveUserEmail();
+    const row = db.getAllSync(`SELECT 1 FROM Favorites WHERE node_id = ? AND user_email = ? LIMIT 1`, [nodeId, email]);
     return row.length > 0;
   } catch (e) {
     return false;
@@ -253,10 +409,11 @@ export const isFavorite = (nodeId) => {
 // ── Navigation Metrics ──────────────────────────────────────────────────────
 export const addNavigationMetric = (distance, startName, endName) => {
   try {
+    const email = getActiveUserEmail();
     const ts = new Date().toISOString();
     db.runSync(
-      'INSERT INTO NavigationMetrics (distance, timestamp, start_name, end_name) VALUES (?, ?, ?, ?)',
-      [distance, ts, startName || null, endName || null]
+      'INSERT INTO NavigationMetrics (distance, timestamp, start_name, end_name, user_email) VALUES (?, ?, ?, ?, ?)',
+      [distance, ts, startName || null, endName || null, email]
     );
   } catch (e) {
     console.error("Error adding navigation metric:", e);
@@ -265,7 +422,8 @@ export const addNavigationMetric = (distance, startName, endName) => {
 
 export const getRecentTracks = () => {
   try {
-    return db.getAllSync('SELECT * FROM NavigationMetrics ORDER BY id DESC LIMIT 10');
+    const email = getActiveUserEmail();
+    return db.getAllSync('SELECT * FROM NavigationMetrics WHERE user_email = ? ORDER BY id DESC LIMIT 10', [email]);
   } catch (e) {
     console.error("Error fetching recent tracks:", e);
     return [];
@@ -274,7 +432,8 @@ export const getRecentTracks = () => {
 
 export const clearRecentTracks = () => {
   try {
-    db.runSync('DELETE FROM NavigationMetrics');
+    const email = getActiveUserEmail();
+    db.runSync('DELETE FROM NavigationMetrics WHERE user_email = ?', [email]);
   } catch (e) {
     console.error("Error clearing recent tracks:", e);
   }
@@ -282,16 +441,17 @@ export const clearRecentTracks = () => {
 
 export const getLifetimeMetrics = () => {
   try {
-    const distRows = db.getAllSync('SELECT SUM(distance) as total FROM NavigationMetrics');
+    const email = getActiveUserEmail();
+    const distRows = db.getAllSync('SELECT SUM(distance) as total FROM NavigationMetrics WHERE user_email = ?', [email]);
     const totalDist = (distRows.length > 0 && distRows[0].total) ? parseFloat(distRows[0].total) : 0;
 
-    const countRows = db.getAllSync('SELECT COUNT(*) as cnt FROM NavigationMetrics');
+    const countRows = db.getAllSync('SELECT COUNT(*) as cnt FROM NavigationMetrics WHERE user_email = ?', [email]);
     const totalRuns = (countRows.length > 0 && countRows[0].cnt) ? parseInt(countRows[0].cnt) : 0;
 
     const todayStr = new Date().toISOString().split('T')[0];
     const todayRows = db.getAllSync(
-      'SELECT SUM(distance) as total FROM NavigationMetrics WHERE timestamp LIKE ?',
-      [`${todayStr}%`]
+      'SELECT SUM(distance) as total FROM NavigationMetrics WHERE user_email = ? AND timestamp LIKE ?',
+      [email, `${todayStr}%`]
     );
     const todayDist = (todayRows.length > 0 && todayRows[0].total) ? parseFloat(todayRows[0].total) : 0;
 
@@ -309,14 +469,15 @@ export const getLifetimeMetrics = () => {
 export const getWeeklyMetrics = () => {
   const list = [];
   try {
+    const email = getActiveUserEmail();
     for (let i = 6; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
       
       const rows = db.getAllSync(
-        `SELECT SUM(distance) as total FROM NavigationMetrics WHERE timestamp LIKE ?`,
-        [`${dateStr}%`]
+        `SELECT SUM(distance) as total FROM NavigationMetrics WHERE user_email = ? AND timestamp LIKE ?`,
+        [email, `${dateStr}%`]
       );
       const total = (rows.length > 0 && rows[0].total) ? parseFloat(rows[0].total) : 0;
       const dayName = date.toLocaleDateString('en-US', { weekday: 'short' });
@@ -332,4 +493,21 @@ export const getWeeklyMetrics = () => {
   }
   return list;
 };
+
+export const deleteUserProfile = () => {
+  try {
+    db.runSync('UPDATE UserProfile SET is_active = 0');
+  } catch (e) {
+    console.error("Error setting user profile to inactive:", e);
+  }
+};
+
+export const clearAllFavorites = () => {
+  try {
+    db.runSync('DELETE FROM Favorites');
+  } catch (e) {
+    console.error("Error clearing favorites:", e);
+  }
+};
+
 

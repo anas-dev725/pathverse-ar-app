@@ -8,16 +8,22 @@ const normalize = (str) =>
   (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
- * Used by the search bar — returns only 'room' type nodes for user selection.
+ * Used by the search bar — searches ALL saved node landmarks (room, corridor, stairs, exit).
  */
 export const fuzzySearchRooms = (query, nodes) => {
+  if (!nodes || !Array.isArray(nodes)) return [];
+  const validNodes = nodes.filter(n => n && n.name && n.name.trim() !== '');
+
   if (!query || query.trim() === '') {
-    return nodes.filter(n => n.type === 'room');
+    return validNodes;
   }
+
   const q = normalize(query);
-  return nodes.filter(node => {
-    if (node.type !== 'room') return false;
-    return normalize(node.name).includes(q) || q.includes(normalize(node.name));
+  if (!q) return validNodes;
+
+  return validNodes.filter(node => {
+    const nameNorm = normalize(node.name);
+    return nameNorm.includes(q) || q.includes(nameNorm);
   });
 };
 

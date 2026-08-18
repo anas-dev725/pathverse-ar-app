@@ -1,8 +1,5 @@
-/**
- * Calculates the shortest path between a starting node and an ending node
- * using the A* (A-Star) pathfinding algorithm over a spatial graph.
- */
-export const calculateAStarPath = (startId, endId, nodes, edges) => {
+// ES module syntax, need to run with Babel or convert to CommonJS
+const calculateAStarPath = (startId, endId, nodes, edges) => {
   const nodeMap = new Map();
   nodes.forEach(n => nodeMap.set(n.id, n));
 
@@ -14,25 +11,20 @@ export const calculateAStarPath = (startId, endId, nodes, edges) => {
   nodes.forEach(n => adjacencyList.set(n.id, []));
 
   edges.forEach(e => {
-    const list1 = adjacencyList.get(e.node1_id);
-    const list2 = adjacencyList.get(e.node2_id);
-    if (list1 && list2) {
-      list1.push({ to: e.node2_id, cost: e.distance });
-      list2.push({ to: e.node1_id, cost: e.distance });
-    }
+    adjacencyList.get(e.node1_id).push({ to: e.node2_id, cost: e.distance });
+    adjacencyList.get(e.node2_id).push({ to: e.node1_id, cost: e.distance });
   });
 
-  // Heuristic: Euclidean distance between nodes in 3D space
   const heuristic = (nodeA, nodeB) => {
     const dx = nodeA.x - nodeB.x;
     const dy = nodeA.y - nodeB.y;
     const dz = nodeA.z - nodeB.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return Math.sqrt(dx*dx + dy*dy + dz*dz);
   };
 
   const openSet = new Set([startId]);
   const cameFrom = new Map();
-
+  
   const gScore = new Map();
   nodes.forEach(n => gScore.set(n.id, Infinity));
   gScore.set(startId, 0);
@@ -44,8 +36,7 @@ export const calculateAStarPath = (startId, endId, nodes, edges) => {
   while (openSet.size > 0) {
     let current = null;
     let lowestF = Infinity;
-
-    // Find node in openSet with lowest fScore
+    
     for (let nodeId of openSet) {
       if (fScore.get(nodeId) < lowestF) {
         lowestF = fScore.get(nodeId);
@@ -54,7 +45,6 @@ export const calculateAStarPath = (startId, endId, nodes, edges) => {
     }
 
     if (current === endId) {
-      // Reconstruct path
       const path = [nodeMap.get(current)];
       while (cameFrom.has(current)) {
         current = cameFrom.get(current);
@@ -64,17 +54,16 @@ export const calculateAStarPath = (startId, endId, nodes, edges) => {
     }
 
     openSet.delete(current);
-
     const neighbors = adjacencyList.get(current) || [];
+    
     for (let neighbor of neighbors) {
       const tentativeG = gScore.get(current) + neighbor.cost;
-
-      // If found a shorter path to neighbor
-      if (tentativeG < gScore.get(neighbor.to)) {
+      
+      if (tentativeG < (gScore.get(neighbor.to) || Infinity)) {
         cameFrom.set(neighbor.to, current);
         gScore.set(neighbor.to, tentativeG);
         fScore.set(neighbor.to, tentativeG + heuristic(nodeMap.get(neighbor.to), nodeMap.get(endId)));
-
+        
         if (!openSet.has(neighbor.to)) {
           openSet.add(neighbor.to);
         }
@@ -82,5 +71,17 @@ export const calculateAStarPath = (startId, endId, nodes, edges) => {
     }
   }
 
-  return []; // No path found
+  return [];
 };
+
+const nodes = [
+  { id: 'it_gate', x: 0, y: 0, z: 0 },
+  { id: 'lab_1', x: 10, y: 0, z: 0 }
+];
+
+const edges = [
+  { node1_id: 'it_gate', node2_id: 'lab_1', distance: 10 }
+];
+
+console.log(calculateAStarPath('it_gate', 'lab_1', nodes, edges).map(n => n.id));
+console.log(calculateAStarPath('lab_1', 'it_gate', nodes, edges).map(n => n.id));

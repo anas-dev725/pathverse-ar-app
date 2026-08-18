@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   ViroARScene, ViroARSceneNavigator, ViroText,
   ViroTrackingStateConstants, ViroNode, ViroPolyline,
-  ViroImage, ViroMaterials, ViroAnimations, ViroDirectionalLight
+  ViroImage, ViroQuad, ViroMaterials, ViroAnimations, ViroDirectionalLight
 } from '@reactvision/react-viro';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
@@ -14,10 +14,22 @@ import { ocrSearchNodes } from '../services/SearchService';
 import { getAllNodes, getAllEdges } from '../database/database';
 import { calculateAStarPath } from '../services/AStarAlgorithm';
 
-// ── Materials ───────────────────────────────────────────────────────────────
+// ── Image assets ────────────────────────────────────────────────────────────
+const CHEVRON_IMG     = require('../../assets/neon_chevron_trans.png');
+const DESTINATION_IMG = require('../../assets/destination_diamond_trans.png');
+
+// ── Materials with explicit Alpha Blend Mode (prevents solid white fallback) ──
 ViroMaterials.createMaterials({
-  neonGreen:  { diffuseColor: '#00FF00', lightingModel: 'Constant' },
-  destMarker: { diffuseColor: '#FF6B35', lightingModel: 'Constant' },
+  neonChevronMat: {
+    diffuseTexture: CHEVRON_IMG,
+    lightingModel: 'Constant',
+    blendMode: 'Alpha',
+  },
+  destMarkerMat: {
+    diffuseTexture: DESTINATION_IMG,
+    lightingModel: 'Constant',
+    blendMode: 'Alpha',
+  },
 });
 
 // ── Animations: gentle hover + destination pulse ────────────────────────────
@@ -30,15 +42,13 @@ ViroAnimations.registerAnimations({
   pulseLoop:    [['pulseUp', 'pulseDown']],
 });
 
-// ── Image assets ────────────────────────────────────────────────────────────
-const CHEVRON_IMG     = require('../../assets/neon_chevron_trans.png');
-const DESTINATION_IMG = require('../../assets/destination_diamond_trans.png');
-
 // ── Global C++ ↔ JS bridge state (never re-initialised) ────────────────────
 let _cameraPos    = [0, 0, 0];
 let _originOffset = [0, 0, 0];   // maps SQLite anchor node → AR world origin
 let _routeNodes   = [];
 let _anchorNode   = null;
+let _rotationAngle = 0;
+let _currentNearestIdx = 0;
 
 // Helper: euclidean distance ignoring Y (horizontal plane)
 const eucXZ = (a, b) => {
@@ -47,43 +57,81 @@ const eucXZ = (a, b) => {
 };
 
 // ── Interpolate chevron positions along path at fixed intervals ─────────────
-const CHEVRON_SPACING = 0.5; // Denser sequence for a solid "runway" look
+const CHEVRON_SPACING = 0.6;
 
 const interpolateChevrons = (worldPos) => {
   const chevrons = [];
+  if (!worldPos || worldPos.length < 2) return chevrons;
+
+  // Pre-calculate segment angles & pitches for smooth corner blending
+  const segs = [];
+  for (let i = 0; i < worldPos.length - 1; i++) {
+    const from = worldPos[i], to = worldPos[i + 1];
+    const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+    const segLen = Math.sqrt(dx * dx + dz * dz);
+    if (segLen < 0.01) continue;
+    const angleDeg = Math.atan2(-dx, -dz) * (180 / Math.PI);
+    const rawPitch = Math.atan2(dy, Math.max(0.01, segLen)) * (180 / Math.PI);
+    const pitch = Math.max(-40, Math.min(40, rawPitch));
+    segs.push({ from, to, dx, dy, dz, segLen, angleDeg, pitch, segIdx: i });
+  }
+
   let distLeft = CHEVRON_SPACING / 2;
 
-  for (let i = 0; i < worldPos.length - 1; i++) {
-    const from = worldPos[i];
-    const to = worldPos[i + 1];
-    
-    const dx = to[0] - from[0];
-    const dy = to[1] - from[1];
-    const dz = to[2] - from[2];
-    const segLen = Math.sqrt(dx * dx + dz * dz);
-    
-    if (segLen < 0.01) continue;
-    
-    // Rotation perfectly facing the geometric path segment
-    const angleDeg = Math.atan2(-dx, -dz) * (180 / Math.PI);
-
+  // Process all route segments (Floor level isolation automatically hides different-floor arrows)
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    const nextSeg = segs[i + 1];
     let walked = 0;
-    while (walked + distLeft <= segLen) {
+
+    while (walked + distLeft <= s.segLen) {
       walked += distLeft;
-      const t = walked / segLen;
-      chevrons.push({
-        pos: [
-          from[0] + dx * t,
-          from[1] + dy * t, // Smooth vertical interpolation (rising/sloping ramps)
-          from[2] + dz * t
-        ],
-        rotY: angleDeg
-      });
+      const t = walked / s.segLen;
+      
+      let curRotY = s.angleDeg;
+      let curPitch = s.pitch;
+
+      // Smoothly blend rotation & pitch near corner transitions (last 1.2 meters of segment)
+      if (nextSeg && s.segLen - walked < 1.2) {
+        const blendFactor = (1.2 - (s.segLen - walked)) / 1.2;
+        let diffRot = nextSeg.angleDeg - s.angleDeg;
+        while (diffRot > 180) diffRot -= 360;
+        while (diffRot < -180) diffRot += 360;
+        curRotY = s.angleDeg + diffRot * blendFactor * 0.5;
+        curPitch = s.pitch + (nextSeg.pitch - s.pitch) * blendFactor * 0.5;
+      }
+
+      const chevPos = [
+        s.from[0] + s.dx * t,
+        s.from[1] + s.dy * t,
+        s.from[2] + s.dz * t
+      ];
+
+      // Rule 2: Floor Level Isolation — Hide chevrons on different floors (vertical height diff > 1.6m)
+      const dyFromCam = Math.abs(chevPos[1] - _cameraPos[1]);
+      if (dyFromCam > 1.6) {
+        distLeft = CHEVRON_SPACING;
+        continue;
+      }
+
+      // Rule 3: Filter out chevrons that are >0.8m behind camera vector on current segment
+      const cdx = chevPos[0] - _cameraPos[0];
+      const cdz = chevPos[2] - _cameraPos[2];
+      const distFromCam = Math.sqrt(cdx * cdx + cdz * cdz);
+      const dotCam = (cdx * s.dx + cdz * s.dz) / Math.max(0.01, s.segLen);
+
+      if (dotCam >= -0.8 || distFromCam < 1.0) {
+        chevrons.push({
+          pos: chevPos,
+          rotY: curRotY,
+          pitch: curPitch
+        });
+      }
       distLeft = CHEVRON_SPACING;
     }
-    distLeft -= (segLen - walked); 
+    distLeft -= (s.segLen - walked);
   }
-  
+
   return chevrons;
 };
 
@@ -114,11 +162,15 @@ const NavigationRouteScene = ({ sceneNavigator }) => {
 
   // Standardized 3D mapping: map DB coords directly to AR coordinates,
   // making Y relative to the starting anchor node's height (shifted for floor level origin at -1.2).
+  const cosA = Math.cos(_rotationAngle);
+  const sinA = Math.sin(_rotationAngle);
   const worldPos = nodes.map(n => {
+    const dx = n.x - ox;
+    const dz = n.z - oz;
     return [
-      n.x - ox,
+      dx * cosA - dz * sinA,
       (n.y - oy) - 1.2,
-      n.z - oz,
+      dx * sinA + dz * cosA,
     ];
   });
 
@@ -127,38 +179,36 @@ const NavigationRouteScene = ({ sceneNavigator }) => {
   return (
     <ViroARScene 
       onTrackingUpdated={onTrackingUpdated} 
-      key={renderKey}
       onCameraTransformUpdate={(ct) => { _cameraPos = ct.position; }}
     >
       <ViroDirectionalLight color="#ffffff" direction={[0, -1, 0]} />
 
-      {/* ── Floor-laid transparent neon green chevrons (ViroImage) ── */}
+      {/* ── Floor-laid transparent neon green chevrons (ViroImage with explicit Alpha material) ── */}
       {chevronData.map((chev, i) => (
         <ViroNode
-          key={`chev-${i}-${renderKey}`}
+          key={`chev-${i}`}
           position={chev.pos}
-          rotation={[-90, chev.rotY, 0]}
-          animation={{ name: 'hoverLoop', run: true, loop: true, delay: i * 100 }}
+          rotation={[-90 + (chev.pitch || 0), chev.rotY, 0]}
         >
           <ViroImage
             source={CHEVRON_IMG}
+            materials={['neonChevronMat']}
             width={0.6}
             height={0.6}
           />
         </ViroNode>
       ))}
 
-
-
       {/* ── Destination diamond marker (ViroImage) ── */}
       {nodes.length > 1 && (
         <ViroNode
-          key={`dest-${renderKey}`}
+          key="dest-marker"
           position={worldPos[worldPos.length - 1]}
           animation={{ name: 'pulseLoop', run: true, loop: true }}
         >
           <ViroImage
             source={DESTINATION_IMG}
+            materials={['destMarkerMat']}
             width={0.8}
             height={0.8}
             rotation={[-90, 0, 0]}
@@ -184,20 +234,34 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
   const rerenderScene = useRef(null);
   const announcedNodes= useRef(new Set());   // prevents repeat voice for same node
   const arrivedRef    = useRef(false);
+  const lastRerouteTs = useRef(0);
 
-  const [distMeters, setDistMeters]   = useState(null);
-  const [relocStatus, setRelocStatus] = useState('');
+  const [distMeters, setDistMeters]     = useState(null);
+  const [legMeters, setLegMeters]       = useState(null);
+  const [nextNodeName, setNextNodeName] = useState('');
+  const [relocStatus, setRelocStatus]   = useState('');
   const [showSummaryModal, setShowModal] = useState(false);
   const [totalRouteDistance, setTotalDistance] = useState('0.0');
   const pulseAnim  = useRef(new Animated.Value(1)).current;
   const relocOpacity = useRef(new Animated.Value(0)).current;
 
+  // Synchronous initialization for instant 1st-click rotation & origin alignment
+  _routeNodes   = routeNodes   || [];
+  _anchorNode   = anchorNode   || null;
+  _originOffset = anchorNode
+    ? [anchorNode.x, anchorNode.y, anchorNode.z]
+    : [0, 0, 0];
+
+  if (_routeNodes && _routeNodes.length >= 2) {
+    const dx = _routeNodes[1].x - _routeNodes[0].x;
+    const dz = _routeNodes[1].z - _routeNodes[0].z;
+    const pathAngle = Math.atan2(dx, dz);
+    _rotationAngle = pathAngle - Math.PI;
+  } else {
+    _rotationAngle = 0;
+  }
+
   useEffect(() => {
-    _routeNodes   = routeNodes   || [];
-    _anchorNode   = anchorNode   || null;
-    _originOffset = anchorNode
-      ? [anchorNode.x, anchorNode.y, anchorNode.z]
-      : [0, 0, 0];
     announcedNodes.current.clear();
     arrivedRef.current = false;
 
@@ -221,7 +285,7 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
           { language: 'en-US', rate: 0.92 }
         );
       }
-    }, 1500); // Wait for AR to initialise before speaking
+    }, 1500);
 
     // Pulsing HUD badge
     Animated.loop(Animated.sequence([
@@ -229,63 +293,126 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
       Animated.timing(pulseAnim, { toValue: 1,    duration: 600, useNativeDriver: true }),
     ])).start();
 
-    // ── Distance polling + proximity voice ───────────────────────────────
-    // WARMUP: Wait 10s before enabling proximity/arrival checks.
-    // This prevents false-positives because at t=0, _cameraPos=[0,0,0]
-    // and the anchor world-position is also [0,0,0], so dist=0 triggers
-    // the arrival sound immediately on every session start.
+    // ── Real-Time Distance Polling + Proximity Voice ─────────────────────
     let warmupDone = false;
     const warmupTimer = setTimeout(() => { warmupDone = true; }, 3000);
 
     const distIv = setInterval(() => {
-      if (!_routeNodes.length) return;
+      if (!_routeNodes || _routeNodes.length === 0) return;
+
+      // 0. If already arrived, lock distance counters to 0.0m permanently
+      if (arrivedRef.current) {
+        setDistMeters('0.0');
+        setLegMeters('0.0');
+        return;
+      }
+
+      const cosA = Math.cos(_rotationAngle);
+      const sinA = Math.sin(_rotationAngle);
+
+      // 1. Find nearest path node to user's current camera position
+      let nearestIdx = 0;
+      let minDistToNode = Infinity;
+
+      _routeNodes.forEach((node, idx) => {
+        const ndx = node.x - _originOffset[0];
+        const ndz = node.z - _originOffset[2];
+        const nw = [
+          ndx * cosA - ndz * sinA,
+          (node.y - _originOffset[1]) - 1.2,
+          ndx * sinA + ndz * cosA
+        ];
+        const dy = Math.abs(_cameraPos[1] - nw[1]);
+        const dxz = Math.sqrt((_cameraPos[0] - nw[0]) ** 2 + (_cameraPos[2] - nw[2]) ** 2);
+        // Heavily penalize vertical floor height mismatch so upper floor rooms aren't matched on lower floors
+        const d = dxz + (dy > 1.8 ? dy * 4.0 : dy * 0.5);
+
+        if (d < minDistToNode) {
+          minDistToNode = d;
+          nearestIdx = idx;
+        }
+      });
+
+      _currentNearestIdx = nearestIdx;
+
+      // 2. Calculate final destination position in AR space
       const finalDest = _routeNodes[_routeNodes.length - 1];
+      const fdx = finalDest.x - _originOffset[0];
+      const fdz = finalDest.z - _originOffset[2];
       const destWorld = [
-        finalDest.x - _originOffset[0],
+        fdx * cosA - fdz * sinA,
         (finalDest.y - _originOffset[1]) - 1.2,
-        finalDest.z - _originOffset[2]
+        fdx * sinA + fdz * cosA
       ];
 
-      const dx = _cameraPos[0] - destWorld[0];
-      const dy = _cameraPos[1] - destWorld[1];
-      const dz = _cameraPos[2] - destWorld[2];
-      const distXZ = Math.sqrt(dx * dx + dz * dz);
-      const distY = Math.abs(dy);
-
-      // Display horizontal distance on the HUD when on the same floor, 
-      // but if the target is on a different floor (dy > 2.0m), show full 3D distance.
-      let displayDist = distXZ;
-      if (distY > 2.0) {
-        displayDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      // 3. Calculate leg distance to next upcoming waypoint (Google Maps style)
+      const targetNext = _routeNodes[nearestIdx + 1] || finalDest;
+      let currentLegDist = 0;
+      if (targetNext) {
+        const ndx_leg = targetNext.x - _originOffset[0];
+        const ndz_leg = targetNext.z - _originOffset[2];
+        const nLegWorld = [
+          ndx_leg * cosA - ndz_leg * sinA,
+          (targetNext.y - _originOffset[1]) - 1.2,
+          ndx_leg * sinA + ndz_leg * cosA
+        ];
+        const legD = Math.sqrt(
+          (_cameraPos[0] - nLegWorld[0]) ** 2 +
+          (_cameraPos[1] - nLegWorld[1]) ** 2 +
+          (_cameraPos[2] - nLegWorld[2]) ** 2
+        );
+        currentLegDist = legD;
+        setLegMeters(legD < 0.4 ? '0.0' : legD.toFixed(1));
+        setNextNodeName(targetNext.name);
       }
-      setDistMeters(displayDist.toFixed(1));
 
-      if (!warmupDone) return; // skip voice until user has had time to move
+      // 4. Calculate total real-time remaining walking distance along actual route path
+      let remainingDist = currentLegDist;
+      for (let i = nearestIdx + 1; i < _routeNodes.length - 1; i++) {
+        const a = _routeNodes[i], b = _routeNodes[i + 1];
+        remainingDist += Math.sqrt(
+          (b.x - a.x) ** 2 + (b.y - a.y) ** 2 + (b.z - a.z) ** 2
+        );
+      }
+      
+      setDistMeters(remainingDist < 0.4 ? '0.0' : remainingDist.toFixed(1));
 
-      // 3D Arrival check: horizontal distance < 1.5m and vertical elevation matches within 2m tolerance
-      if (!arrivedRef.current && distXZ < 1.5 && distY < 2.0) {
+      if (!warmupDone) return;
+
+      // 5. Arrival check: ONLY when user reaches the FINAL destination node on the CORRECT FLOOR (fdistY < 1.0m)
+      const isFinalNode = nearestIdx === _routeNodes.length - 1;
+      const fdx_cam = _cameraPos[0] - destWorld[0];
+      const fdy_cam = _cameraPos[1] - destWorld[1];
+      const fdz_cam = _cameraPos[2] - destWorld[2];
+      const fdistXZ = Math.sqrt(fdx_cam * fdx_cam + fdz_cam * fdz_cam);
+      const fdistY = Math.abs(fdy_cam);
+
+      if (!arrivedRef.current && isFinalNode && fdistXZ < 1.6 && fdistY < 1.0) {
         arrivedRef.current = true;
-        Speech.speak('You have reached your destination.', { language: 'en-US', rate: 0.92, pitch: 1.1 });
+        setDistMeters('0.0');
+        setLegMeters('0.0');
+        Speech.speak(`You have reached ${finalDest?.name || 'your destination'}.`, { language: 'en-US', rate: 0.92, pitch: 1.1 });
         setShowModal(true);
       }
 
-      // Intermediate node proximity — announce once per node, within 3D bounding box
+      // 4. Intermediate node proximity voice announcements
       _routeNodes.forEach((node, i) => {
-        if (i === 0) return; // skip anchor node itself
+        if (i === 0) return;
+        const ndx = node.x - _originOffset[0];
+        const ndz = node.z - _originOffset[2];
         const nWorld = [
-          node.x - _originOffset[0],
+          ndx * cosA - ndz * sinA,
           (node.y - _originOffset[1]) - 1.2,
-          node.z - _originOffset[2]
+          ndx * sinA + ndz * cosA
         ];
-        const ndx = _cameraPos[0] - nWorld[0];
-        const ndy = _cameraPos[1] - nWorld[1];
-        const ndz = _cameraPos[2] - nWorld[2];
-        const ndistXZ = Math.sqrt(ndx * ndx + ndz * ndz);
-        const ndistY = Math.abs(ndy);
+        const ndx_cam = _cameraPos[0] - nWorld[0];
+        const ndy_cam = _cameraPos[1] - nWorld[1];
+        const ndz_cam = _cameraPos[2] - nWorld[2];
+        const ndistXZ = Math.sqrt(ndx_cam * ndx_cam + ndz_cam * ndz_cam);
+        const ndistY = Math.abs(ndy_cam);
 
         if (ndistXZ < 2.0 && ndistY < 2.0 && !announcedNodes.current.has(node.id)) {
           announcedNodes.current.add(node.id);
-          // If the next node is a transition node (e.g. stairs) and we are changing elevation:
           const prevNode = _routeNodes[i - 1];
           if (node.type === 'stairs' && prevNode && Math.abs(node.y - prevNode.y) > 0.5) {
             Speech.speak(`Approaching stairs. Prepare to transition to the next floor.`, { language: 'en-US', rate: 0.95 });
@@ -294,6 +421,43 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
           }
         }
       });
+
+      // 5. High-precision Wrong-Turn Engine (Triggers if user strays >1.8m off course or overshoots turn)
+      const now = Date.now();
+      if (now - lastRerouteTs.current > 1500) {
+        let minSegmentDist = Infinity;
+        for (let i = 0; i < _routeNodes.length - 1; i++) {
+          const nA = _routeNodes[i], nB = _routeNodes[i + 1];
+          const ax = (nA.x - _originOffset[0]) * cosA - (nA.z - _originOffset[2]) * sinA;
+          const az = (nA.x - _originOffset[0]) * sinA + (nA.z - _originOffset[2]) * cosA;
+          const bx = (nB.x - _originOffset[0]) * cosA - (nB.z - _originOffset[2]) * sinA;
+          const bz = (nB.x - _originOffset[0]) * sinA + (nB.z - _originOffset[2]) * cosA;
+
+          const vx = bx - ax, vz = bz - az;
+          const lenSq = vx * vx + vz * vz;
+          if (lenSq < 0.01) continue;
+
+          const wx = _cameraPos[0] - ax, wz = _cameraPos[2] - az;
+          // Correct 2D dot product: (W . V) = wx * vx + wz * vz
+          const t = Math.max(0, Math.min(1, (wx * vx + wz * vz) / lenSq));
+          const projX = ax + t * vx, projZ = az + t * vz;
+          const segD = Math.sqrt((_cameraPos[0] - projX) ** 2 + (_cameraPos[2] - projZ) ** 2);
+          if (segD < minSegmentDist) minSegmentDist = segD;
+        }
+
+        // Alert user if they walk >2.0m off route (AR chevrons remain anchored on the floor)
+        if (minSegmentDist > 2.0) {
+          lastRerouteTs.current = now;
+          Speech.stop();
+          Speech.speak(`Wrong turn detected. Please turn back towards ${finalDest?.name || 'your path'}.`, { language: 'en-US', rate: 0.92 });
+          setRelocStatus(`⚠️ Wrong Turn! Turn back towards ${finalDest?.name || 'your path'}`);
+          Animated.sequence([
+            Animated.timing(relocOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+            Animated.delay(3500),
+            Animated.timing(relocOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+          ]).start(() => setRelocStatus(''));
+        }
+      }
     }, 300);
 
     // Start passive re-localization loop
@@ -308,7 +472,7 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
     };
   }, []);
 
-  // Silent snap re-localization (Instruction 7)
+  // Silent snap re-localization
   const relocLoop = useCallback(async () => {
     if (!relocRunning.current) return;
     try {
@@ -365,6 +529,38 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
   const xpEarned = Math.max(10, Math.round(parseFloat(totalRouteDistance || '0') * 0.5) + 5);
   const stepsTaken = Math.round(parseFloat(totalRouteDistance || '0') * 1.35) || 8;
 
+  // Re-align path to camera forward view from current physical position
+  const handleRealign = () => {
+    if (_routeNodes && _routeNodes.length >= 2) {
+      const cosA = Math.cos(_rotationAngle);
+      const sinA = Math.sin(_rotationAngle);
+      let nextIdx = 1;
+      for (let i = 0; i < _routeNodes.length; i++) {
+        const n = _routeNodes[i];
+        const ndx = n.x - _originOffset[0];
+        const ndz = n.z - _originOffset[2];
+        const nw = [ndx * cosA - ndz * sinA, (n.y - _originOffset[1]) - 1.2, ndx * sinA + ndz * cosA];
+        const distToCam = Math.sqrt((_cameraPos[0] - nw[0]) ** 2 + (_cameraPos[2] - nw[2]) ** 2);
+        if (distToCam > 1.5) {
+          nextIdx = i;
+          break;
+        }
+      }
+      const tgt = _routeNodes[nextIdx] || _routeNodes[1];
+      const dx = tgt.x - _originOffset[0];
+      const dz = tgt.z - _originOffset[2];
+      const pathAngle = Math.atan2(dx, dz);
+      _rotationAngle = pathAngle - Math.PI;
+      setRelocStatus('🧭 Path aligned to camera view');
+      Animated.sequence([
+        Animated.timing(relocOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+        Animated.delay(2000),
+        Animated.timing(relocOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]).start(() => setRelocStatus(''));
+      if (rerenderScene.current) rerenderScene.current();
+    }
+  };
+
   return (
     <View style={styles.container}>
       <ViewShot ref={viewShotRef} style={{ flex: 1 }}>
@@ -389,14 +585,22 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
             {/* Header row */}
             <View style={styles.distCardHeader}>
               <View style={styles.navDot} />
-              <Text style={styles.distLabel}>NAVIGATING TO</Text>
+              <Text style={styles.distLabel}>NAVIGATING TO {dest.name.toUpperCase()}</Text>
             </View>
-            <Text style={styles.destName} numberOfLines={1}>{dest.name}</Text>
 
-            {/* Distance value */}
+            {/* Google Maps Style Turn-by-Turn Leg Instruction */}
             <View style={styles.distRow}>
-              <Text style={styles.distValue}>{distMeters}</Text>
-              <Text style={styles.distUnit}>m away</Text>
+              <Text style={styles.distValue}>{legMeters !== null ? legMeters : distMeters}</Text>
+              <Text style={styles.distUnit}>m straight</Text>
+            </View>
+            <Text style={styles.destName} numberOfLines={1}>
+              {nextNodeName ? `then head towards ${nextNodeName}` : `towards ${dest.name}`}
+            </Text>
+
+            {/* Total remaining route distance indicator */}
+            <View style={styles.totalRow}>
+              <Ionicons name="location-sharp" size={12} color="#00e5ff" style={{ marginRight: 4 }} />
+              <Text style={styles.totalTxt}>{distMeters} m total remaining</Text>
             </View>
 
             {/* Progress bar */}
@@ -425,8 +629,12 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
         </View>
       )}
 
-      {/* ── Stop pill button ── */}
+      {/* ── Stop & Re-align Pill Buttons ── */}
       <View style={styles.stopWrap}>
+        <TouchableOpacity style={styles.alignBtn} onPress={handleRealign} activeOpacity={0.8}>
+          <Ionicons name="compass-outline" size={18} color="#00e5ff" />
+          <Text style={styles.alignTxt}>Re-align Path</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.stopBtn} onPress={onStop} activeOpacity={0.8}>
           <Ionicons name="stop-circle-outline" size={18} color="#fff" />
           <Text style={styles.stopTxt}>End Navigation</Text>
@@ -524,9 +732,11 @@ const styles = StyleSheet.create({
   navDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#2ecc71', marginRight: 8 },
   distLabel: { color: '#4db8ff', fontSize: 10, fontWeight: '800', letterSpacing: 2.5 },
   destName: { color: '#fff', fontSize: 17, fontWeight: '800', marginBottom: 10, marginTop: 2 },
-  distRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 12 },
+  distRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 2 },
   distValue: { color: '#fff', fontSize: 46, fontWeight: '900', letterSpacing: -1, lineHeight: 50 },
   distUnit:  { color: '#4db8ff', fontSize: 16, fontWeight: '700', marginLeft: 8, marginBottom: 6 },
+  totalRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  totalTxt: { color: '#00e5ff', fontSize: 12, fontWeight: '700' },
   progressTrack: { height: 4, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', marginBottom: 10 },
   progressFill:  { height: 4, borderRadius: 2 },
   crumbTxt: { color: 'rgba(255,255,255,0.35)', fontSize: 11, fontWeight: '600' },
@@ -538,14 +748,21 @@ const styles = StyleSheet.create({
   },
   relocTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  stopWrap: { position: 'absolute', bottom: 44, left: 0, right: 0, alignItems: 'center' },
+  stopWrap: { position: 'absolute', bottom: 44, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, paddingHorizontal: 16 },
+  alignBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(7, 20, 40, 0.85)',
+    paddingHorizontal: 18, paddingVertical: 12, borderRadius: 30,
+    borderWidth: 1, borderColor: 'rgba(0, 229, 255, 0.5)',
+  },
+  alignTxt: { color: '#00e5ff', fontWeight: '700', fontSize: 13 },
   stopBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: 'rgba(0,0,0,0.72)',
-    paddingHorizontal: 28, paddingVertical: 14, borderRadius: 30,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.78)',
+    paddingHorizontal: 18, paddingVertical: 12, borderRadius: 30,
     borderWidth: 1, borderColor: 'rgba(255,77,77,0.45)',
   },
-  stopTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  stopTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
   // ── Destination Modal ────────────────────────────────────────────────────
   modalOverlay: {

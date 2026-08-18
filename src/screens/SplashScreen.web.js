@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, Animated, Dimensions, Easing,
-  TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ScrollView
+  TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ScrollView, Image
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { saveUserProfile, getUserProfile } from '../database/database'; // Resolves to database.web.js on Web
+import { saveUserProfile, getUserProfile, findProfileByEmail } from '../database/database'; // Resolves to database.web.js on Web
+
+const IMG_SCAN = require('../../assets/onboarding_scan.png');
+const IMG_SEARCH = require('../../assets/onboarding_search.png');
+const IMG_AR = require('../../assets/onboarding_ar.png');
 
 const { width: W, height: H } = Dimensions.get('window');
 
@@ -29,91 +33,22 @@ const GlowBackground = () => {
   );
 };
 
-// Graphic illustration components matching the premium onboarding mockup
+// Graphic illustration components displaying character images
 const SlideGraphic = ({ index }) => {
-  if (index === 0) {
-    return (
-      <View style={styles.graphicContainer}>
-        {/* Card Deck stack matching Slide 1 */}
-        <View style={[styles.deckCard, styles.deckCardBack]} />
-        <View style={[styles.deckCard, styles.deckCardMiddle]} />
-        <View style={[styles.deckCard, styles.deckCardFront]}>
-          <View style={styles.scanTarget}>
-            <Ionicons name="scan-outline" size={40} color="#8EB3D3" />
-            <Text style={styles.scanCodeText}>ROOM 302</Text>
-            <View style={styles.scanSubLabel}>
-              <View style={styles.pulseDot} />
-              <Text style={styles.scanStatusText}>Calibrating AR</Text>
-            </View>
-          </View>
-        </View>
-      </View>
-    );
-  }
+  let imgSource;
+  if (index === 0) imgSource = IMG_SCAN;
+  else if (index === 1) imgSource = IMG_SEARCH;
+  else imgSource = IMG_AR;
 
-  if (index === 1) {
-    return (
-      <View style={styles.graphicContainer}>
-        {/* Location Feed list matching Slide 2 */}
-        <View style={styles.feedContainer}>
-          {[
-            { name: 'Physics Lab 202', floor: 'Floor 2, Block A', icon: 'school-outline', active: true },
-            { name: 'Central Library', floor: 'Floor 1, Block B', icon: 'book-outline', active: false },
-            { name: 'Student Cafeteria', floor: 'Floor 1, Block C', icon: 'cafe-outline', active: false }
-          ].map((item, i) => (
-            <View key={i} style={styles.feedItem}>
-              <View style={styles.feedIconBox}>
-                <Ionicons name={item.icon} size={20} color="#8EB3D3" />
-              </View>
-              <View style={styles.feedTextBox}>
-                <Text style={styles.feedTitle} numberOfLines={1}>{item.name}</Text>
-                <Text style={styles.feedSub}>{item.floor}</Text>
-              </View>
-              <View style={[styles.feedBtn, item.active && styles.feedBtnActive]}>
-                <Text style={[styles.feedBtnText, item.active && styles.feedBtnTextActive]}>
-                  {item.active ? 'Active' : 'Go'}
-                </Text>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  }
-
-  if (index === 2) {
-    return (
-      <View style={styles.graphicContainer}>
-        {/* Radar concentric circular tracks and nodes matching Slide 3 */}
-        <View style={styles.radarGraphicFrame}>
-          <View style={styles.radarGraphicRingOuter} />
-          <View style={styles.radarGraphicRingMiddle} />
-          <View style={styles.radarGraphicRingInner} />
-          
-          {/* Central dark circle */}
-          <View style={styles.radarGraphicCenter}>
-            <Ionicons name="navigate" size={24} color="#FFF" />
-          </View>
-
-          {/* Orbiting nodes */}
-          <View style={[styles.orbitNode, { top: 15, left: 40 }]}>
-            <Ionicons name="location-outline" size={14} color="#8EB3D3" />
-          </View>
-          <View style={[styles.orbitNode, { bottom: 25, right: 25 }]}>
-            <Ionicons name="footsteps-outline" size={14} color="#8EB3D3" />
-          </View>
-          <View style={[styles.orbitNode, { top: 95, right: 10 }]}>
-            <Ionicons name="flag-outline" size={14} color="#8EB3D3" />
-          </View>
-          <View style={[styles.orbitNode, { bottom: 65, left: 15 }]}>
-            <Ionicons name="time-outline" size={14} color="#8EB3D3" />
-          </View>
-        </View>
-      </View>
-    );
-  }
-
-  return null;
+  return (
+    <View style={styles.graphicContainer}>
+      <Image
+        source={imgSource}
+        style={styles.onboardingImage}
+        resizeMode="cover"
+      />
+    </View>
+  );
 };
 
 // Corner HUD brackets from the mockup image
@@ -170,7 +105,7 @@ const TUTORIAL_SLIDES = [
   },
   {
     title: 'Choose Where to Go',
-    desc: 'Search for any classroom, lab, or office on campus. We calculate the optimal path, guiding you seamlessly across multiple floors.',
+    desc: 'Select your current location (such as Lab 7) and your desired destination (such as Lab 3). We instantly map the shortest path through the hallways.',
   },
   {
     title: 'Follow the 3D Runway',
@@ -208,6 +143,15 @@ export default function SplashScreen({ onFinish }) {
 
   // Orbiting radar blip rotation
   const radarOrbitSpin = useRef(new Animated.Value(0)).current;
+
+  // 3D Loop Animation refs for Slides Graphics
+  const floatAnim = useRef(new Animated.Value(0)).current;
+  const rotateYAnim = useRef(new Animated.Value(0)).current;
+  const rotateXAnim = useRef(new Animated.Value(0)).current;
+  const scanLineAnim = useRef(new Animated.Value(0)).current;
+  const rotateZAnim = useRef(new Animated.Value(0)).current;
+
+  const scrollViewRef = useRef(null);
 
   // Wordmark + Subtitle + CTA reveal sequence values
   const wordmarkOpacity = useRef(new Animated.Value(0)).current;
@@ -281,7 +225,40 @@ export default function SplashScreen({ onFinish }) {
       ])
     ).start();
 
-    // 5. Wordmark + Subtitle + CTA reveal sequence
+    // 5. 3D loops for slider visualizations (Floating & Rotating) - useNativeDriver: false for web previews
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(floatAnim, { toValue: 1, duration: 2500, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(floatAnim, { toValue: 0, duration: 2500, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+      ])
+    ).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(rotateYAnim, { toValue: 1, duration: 3200, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(rotateYAnim, { toValue: -1, duration: 3200, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+      ])
+    ).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(rotateXAnim, { toValue: 1, duration: 3800, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(rotateXAnim, { toValue: -1, duration: 3800, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+      ])
+    ).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLineAnim, { toValue: 1, duration: 2200, easing: Easing.linear, useNativeDriver: false }),
+        Animated.timing(scanLineAnim, { toValue: 0, duration: 0, useNativeDriver: false }),
+      ])
+    ).start();
+
+    Animated.loop(
+      Animated.timing(rotateZAnim, { toValue: 1, duration: 15000, easing: Easing.linear, useNativeDriver: false })
+    ).start();
+
+    // 6. Wordmark + Subtitle + CTA reveal sequence
     Animated.sequence([
       Animated.delay(300),
       Animated.parallel([
@@ -317,18 +294,9 @@ export default function SplashScreen({ onFinish }) {
 
   const handleNextSlide = () => {
     if (slideIndex < TUTORIAL_SLIDES.length - 1) {
-      Animated.timing(slideFadeAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: false,
-      }).start(() => {
-        setSlideIndex(prev => prev + 1);
-        Animated.timing(slideFadeAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: false,
-        }).start();
-      });
+      const nextIdx = slideIndex + 1;
+      scrollViewRef.current?.scrollTo({ x: nextIdx * W, animated: true });
+      setSlideIndex(nextIdx);
     } else {
       transitionTo('REGISTER');
     }
@@ -336,30 +304,21 @@ export default function SplashScreen({ onFinish }) {
 
   const handlePrevSlide = () => {
     if (slideIndex > 0) {
-      Animated.timing(slideFadeAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: false,
-      }).start(() => {
-        setSlideIndex(prev => prev - 1);
-        Animated.timing(slideFadeAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: false,
-        }).start();
-      });
+      const prevIdx = slideIndex - 1;
+      scrollViewRef.current?.scrollTo({ x: prevIdx * W, animated: true });
+      setSlideIndex(prevIdx);
     }
   };
 
-  const handleRegister = () => {
+  const handleSignUp = () => {
     setValidationErr('');
     if (!name.trim()) {
-      setValidationErr('Please enter your full name.');
+      setValidationErr('Please enter your full name to sign up.');
       return;
     }
     const cleanEmail = email.trim();
     if (!cleanEmail) {
-      setValidationErr('Please enter your email.');
+      setValidationErr('Please enter your email address.');
       return;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -369,13 +328,61 @@ export default function SplashScreen({ onFinish }) {
     }
 
     try {
-      saveUserProfile(name.trim(), cleanEmail);
-      Animated.timing(fadeAnim, { toValue: 0, duration: 350, useNativeDriver: false }).start(() => {
-        onFinish();
-      });
+      const existing = findProfileByEmail(cleanEmail);
+      if (existing) {
+        setValidationErr('An account with this email already exists. Tap Login to restore.');
+        return;
+      }
+      saveUserProfile(name.trim(), cleanEmail, selectedRole);
+      proceedToGreeting(name.trim());
     } catch (e) {
       setValidationErr('Error completing setup. Please try again.');
     }
+  };
+
+  const handleLogin = () => {
+    setValidationErr('');
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setValidationErr('Please enter your email address to log in.');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setValidationErr('Please check your email address formatting.');
+      return;
+    }
+
+    try {
+      const existing = findProfileByEmail(cleanEmail);
+      if (!existing) {
+        setValidationErr('No profile found with this email. Fill out details and tap Sign Up.');
+        return;
+      }
+      saveUserProfile(existing.name, existing.email, existing.role);
+      proceedToGreeting(existing.name);
+    } catch (e) {
+      setValidationErr('Error logging in. Please try again.');
+    }
+  };
+
+  const proceedToGreeting = (userName) => {
+    setSubScreen('GREETING');
+    Animated.timing(greetingAnim, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: false,
+    }).start(() => {
+      setTimeout(() => {
+        Animated.timing(fadeAnim, {
+          toValue: 0,
+          duration: 350,
+          useNativeDriver: false,
+        }).start(() => {
+          onFinish();
+        });
+      }, 1800);
+    });
   };
 
   // Interpolate radar sweep orbit rotation
@@ -390,6 +397,13 @@ export default function SplashScreen({ onFinish }) {
     <View style={styles.container}>
       {/* Background Gradient */}
       <LinearGradient colors={['#A2B9D4', '#F4F7FB']} style={StyleSheet.absoluteFill} />
+
+      {/* Hidden pre-cache images to ensure immediate load */}
+      <View style={{ width: 0, height: 0, opacity: 0, position: 'absolute' }} pointerEvents="none">
+        <Image source={IMG_SCAN} />
+        <Image source={IMG_SEARCH} />
+        <Image source={IMG_AR} />
+      </View>
 
       {/* Soft Ambient Glow Background */}
       <GlowBackground />
@@ -434,12 +448,12 @@ export default function SplashScreen({ onFinish }) {
               {/* Center Compass Rounded Square Logo Box */}
               <Animated.View style={[styles.centerIconContainer, { opacity: iconOpacity }]}>
                 <LinearGradient
-                  colors={['#00E5FF', '#2979FF']}
+                  colors={['#2979FF', '#1E293B']}
                   style={StyleSheet.absoluteFill}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
                 />
                 <View style={styles.centerIconInner}>
-                  <Ionicons name="navigate-outline" size={22} color="#2979FF" />
+                  <Ionicons name="navigate-outline" size={22} color="#1E293B" />
                 </View>
               </Animated.View>
             </View>
@@ -476,13 +490,8 @@ export default function SplashScreen({ onFinish }) {
                 activeOpacity={0.85}
                 onPress={() => transitionTo('TUTORIAL')}
               >
-                <LinearGradient
-                  colors={['#8EB3D3', '#7CA2C4']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={StyleSheet.absoluteFill}
-                />
                 <Text style={styles.ctaBtnText}>Get started</Text>
-                <Ionicons name="arrow-forward" size={17} color="#fff" />
+                <Ionicons name="arrow-forward" size={17} color="#fff" style={{ marginLeft: 6 }} />
               </TouchableOpacity>
             </Animated.View>
           </View>
@@ -490,14 +499,19 @@ export default function SplashScreen({ onFinish }) {
 
         {/* ── STAGE 2: SWIPE TUTORIAL CARDS ────────────────────────────────── */}
         {subScreen === 'TUTORIAL' && (
-          <View style={styles.tutorialContent}>
-            <View style={styles.tutorialHeader}>
+          <View style={StyleSheet.absoluteFill}>
+            {/* Absolute Hovered Header */}
+            <View style={styles.tutorialHeaderHover}>
               {slideIndex > 0 ? (
-                <TouchableOpacity onPress={handlePrevSlide} hitSlop={{top:15, bottom:15, left:15, right:15}}>
-                  <Ionicons name="chevron-back" size={20} color="#64748B" />
+                <TouchableOpacity
+                  style={styles.backButtonCircle}
+                  onPress={handlePrevSlide}
+                  hitSlop={{top:15, bottom:15, left:15, right:15}}
+                >
+                  <Ionicons name="chevron-back" size={18} color="#1E293B" />
                 </TouchableOpacity>
               ) : (
-                <Text style={styles.progressIndicatorLabel}>STEP {slideIndex + 1} OF {TUTORIAL_SLIDES.length}</Text>
+                <View style={{ width: 32 }} />
               )}
               
               {/* Centered logo matching mockup layout */}
@@ -506,50 +520,66 @@ export default function SplashScreen({ onFinish }) {
                 <Text style={styles.headerLogoText}>pathverse</Text>
               </View>
 
-              <TouchableOpacity onPress={() => transitionTo('REGISTER')} hitSlop={{top:15, bottom:15, left:15, right:15}}>
+              <TouchableOpacity
+                style={styles.skipButtonPill}
+                onPress={() => transitionTo('REGISTER')}
+                hitSlop={{top:15, bottom:15, left:15, right:15}}
+              >
                 <Text style={styles.skipBtnText}>Skip</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Custom Illustration Graphic */}
-            <SlideGraphic index={slideIndex} />
+            {/* Full Screen ScrollView */}
+            <ScrollView
+              ref={scrollViewRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(e) => {
+                const newIndex = Math.round(e.nativeEvent.contentOffset.x / W);
+                setSlideIndex(newIndex);
+              }}
+              style={StyleSheet.absoluteFill}
+            >
+              {TUTORIAL_SLIDES.map((slide, idx) => (
+                <View key={idx} style={{ width: W, height: H, justifyContent: 'space-between' }}>
+                  {/* Top Graphic Space */}
+                  <View style={styles.slideGraphicWrap}>
+                    <SlideGraphic index={idx} />
+                  </View>
 
-            {/* Text container directly on screen */}
-            <Animated.View style={[styles.slideTextContainer, { opacity: slideFadeAnim }]}>
-              <Text style={styles.slideTitleText}>{activeSlide.title}</Text>
-              <Text style={styles.slideDescText}>{activeSlide.desc}</Text>
-            </Animated.View>
+                  {/* Bottom White Card */}
+                  <View style={styles.bottomWhiteCard}>
+                    <Text style={styles.slideTitleText}>{slide.title}</Text>
+                    <Text style={styles.slideDescText}>{slide.desc}</Text>
 
-            {/* Swipe dots */}
-            <View style={styles.progressDotsContainer}>
-              {TUTORIAL_SLIDES.map((_, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.indicatorDot,
-                    slideIndex === idx ? styles.indicatorDotActive : null
-                  ]}
-                />
+                    {/* Progress dots inside white card */}
+                    <View style={styles.progressDotsContainer}>
+                      {TUTORIAL_SLIDES.map((_, dotIdx) => (
+                        <View
+                          key={dotIdx}
+                          style={[
+                            styles.indicatorDot,
+                            slideIndex === dotIdx ? styles.indicatorDotActive : null
+                          ]}
+                        />
+                      ))}
+                    </View>
+
+                    {/* Action button inside white card */}
+                    <TouchableOpacity
+                      style={styles.nextSlideBtnFull}
+                      onPress={handleNextSlide}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.nextSlideBtnTextFull}>
+                        {slideIndex === TUTORIAL_SLIDES.length - 1 ? 'Get Started' : 'Next'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               ))}
-            </View>
-
-            {/* Bottom wide action button */}
-            <View style={styles.bottomCtaRow}>
-              <TouchableOpacity
-                style={styles.nextSlideBtnFull}
-                onPress={handleNextSlide}
-                activeOpacity={0.85}
-              >
-                <LinearGradient
-                  colors={['#8EB3D3', '#7CA2C4']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={StyleSheet.absoluteFill}
-                />
-                <Text style={styles.nextSlideBtnTextFull}>
-                  {slideIndex === TUTORIAL_SLIDES.length - 1 ? 'Get Started' : 'Next'}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         )}
 
@@ -559,11 +589,25 @@ export default function SplashScreen({ onFinish }) {
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.registerContainer}
           >
+            {/* Top Navigation Bar matching Mockup */}
+            <View style={styles.registerHeaderHover}>
+              <TouchableOpacity
+                style={styles.backButtonCircle}
+                onPress={() => transitionTo('TUTORIAL')}
+                hitSlop={{top:15, bottom:15, left:15, right:15}}
+              >
+                <Ionicons name="chevron-back" size={18} color="#1E293B" />
+              </TouchableOpacity>
+              
+              <View style={{ width: 32 }} />
+            </View>
+
             <ScrollView
               contentContainerStyle={styles.registerScrollArea}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
+              {/* Profile Intro header block inside scroll */}
               <View style={styles.formIntro}>
                 <View style={styles.shieldPulseIcon}>
                   <LinearGradient
@@ -579,22 +623,16 @@ export default function SplashScreen({ onFinish }) {
                 <Text style={styles.profileSubText}>Create your profile to explore exciting features and start navigation.</Text>
               </View>
 
-              {/* Form Input fields */}
-              <View style={styles.formInputCard}>
-                <Text style={styles.textLabel}>Full name</Text>
+              <View style={styles.registerFormWrap}>
+                {/* Full Name Input Field */}
+                <Text style={styles.inputLabelText}>Full Name</Text>
                 <View style={[
-                  styles.formInputContainer,
-                  nameFocused && styles.formInputContainerFocused
+                  styles.mockupInputContainer,
+                  nameFocused && styles.mockupInputContainerFocused
                 ]}>
-                  <Ionicons
-                    name="person-outline"
-                    size={16}
-                    color={nameFocused ? '#2979FF' : '#94A3B8'}
-                    style={{ marginRight: 10 }}
-                  />
                   <TextInput
-                    style={styles.textInput}
-                    placeholder="example"
+                    style={styles.mockupTextInput}
+                    placeholder="Enter your name"
                     placeholderTextColor="#94A3B8"
                     value={name}
                     onChangeText={setName}
@@ -605,22 +643,15 @@ export default function SplashScreen({ onFinish }) {
                   />
                 </View>
 
-                <View style={{ height: 16 }} />
-
-                <Text style={styles.textLabel}>Email address</Text>
+                {/* Email Address Input Field */}
+                <Text style={styles.inputLabelText}>Email</Text>
                 <View style={[
-                  styles.formInputContainer,
-                  emailFocused && styles.formInputContainerFocused
+                  styles.mockupInputContainer,
+                  emailFocused && styles.mockupInputContainerFocused
                 ]}>
-                  <Ionicons
-                    name="mail-outline"
-                    size={16}
-                    color={emailFocused ? '#2979FF' : '#94A3B8'}
-                    style={{ marginRight: 10 }}
-                  />
                   <TextInput
-                    style={styles.textInput}
-                    placeholder="example@gmail.com"
+                    style={styles.mockupTextInput}
+                    placeholder="Enter your email"
                     placeholderTextColor="#94A3B8"
                     value={email}
                     onChangeText={setEmail}
@@ -629,13 +660,12 @@ export default function SplashScreen({ onFinish }) {
                     keyboardType="email-address"
                     autoCapitalize="none"
                     returnKeyType="done"
-                    onSubmitEditing={handleRegister}
+                    onSubmitEditing={handleLogin}
                   />
                 </View>
 
-                <View style={{ height: 20 }} />
-
-                <Text style={styles.textLabel}>Sign up as</Text>
+                {/* Role Selector Field */}
+                <Text style={styles.inputLabelText}>Select Role</Text>
                 <View style={styles.roleContainer}>
                   {[
                     { id: 'student', label: 'Student', icon: 'school-outline' },
@@ -674,19 +704,24 @@ export default function SplashScreen({ onFinish }) {
                 )}
               </View>
 
-              <TouchableOpacity
-                style={styles.finishBtn}
-                activeOpacity={0.8}
-                onPress={handleRegister}
-              >
-                <LinearGradient
-                  colors={['#8EB3D3', '#7CA2C4']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  style={StyleSheet.absoluteFill}
-                />
-                <Text style={styles.finishBtnText}>Create account</Text>
-                <Ionicons name="arrow-forward-outline" size={18} color="#fff" />
-              </TouchableOpacity>
+              {/* Actions Stack */}
+              <View style={styles.authActionsWrap}>
+                <TouchableOpacity
+                  style={styles.mockupSubmitBtn}
+                  activeOpacity={0.8}
+                  onPress={handleSignUp}
+                >
+                  <Text style={styles.mockupSubmitBtnText}>Sign Up</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.mockupSubmitBtn, styles.mockupSubmitBtnOutline]}
+                  activeOpacity={0.8}
+                  onPress={handleLogin}
+                >
+                  <Text style={[styles.mockupSubmitBtnText, styles.mockupSubmitBtnTextOutline]}>Login</Text>
+                </TouchableOpacity>
+              </View>
             </ScrollView>
           </KeyboardAvoidingView>
         )}
@@ -767,17 +802,17 @@ const styles = StyleSheet.create({
     width: 68, height: 68,
     borderRadius: 34,
     borderWidth: 2,
-    borderColor: 'rgba(0, 229, 255, 0.55)',
+    borderColor: 'rgba(41, 121, 255, 0.6)',
   },
   radarRing1: {
     position: 'absolute',
     borderWidth: 2.5,
-    borderColor: 'rgba(0, 229, 255, 0.65)',
+    borderColor: 'rgba(41, 121, 255, 0.75)',
   },
   radarRing2: {
     position: 'absolute',
     borderWidth: 2,
-    borderColor: 'rgba(41, 121, 255, 0.55)',
+    borderColor: 'rgba(30, 41, 59, 0.6)',
     borderStyle: 'dashed',
   },
   radarRing3: {
@@ -785,21 +820,21 @@ const styles = StyleSheet.create({
     width: 260, height: 260,
     borderRadius: 130,
     borderWidth: 1.5,
-    borderColor: 'rgba(0, 229, 255, 0.2)',
+    borderColor: 'rgba(30, 41, 59, 0.25)',
   },
   pingDot: {
     position: 'absolute',
     width: 5, height: 5,
     borderRadius: 2.5,
-    backgroundColor: '#00E5FF',
-    shadowColor: '#00E5FF', shadowOpacity: 0.8, shadowRadius: 4,
+    backgroundColor: '#2979FF',
+    shadowColor: '#2979FF', shadowOpacity: 0.8, shadowRadius: 4,
   },
   orbitContainer: {
     position: 'absolute',
     width: 180, height: 180,
     borderRadius: 90,
     borderWidth: 2,
-    borderColor: 'rgba(41, 121, 255, 0.35)',
+    borderColor: 'rgba(30, 41, 59, 0.35)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -809,8 +844,8 @@ const styles = StyleSheet.create({
     left: '50%',
     width: 8, height: 8,
     borderRadius: 4,
-    backgroundColor: '#00E5FF',
-    shadowColor: '#00E5FF', shadowOpacity: 0.8, shadowRadius: 5,
+    backgroundColor: '#2979FF',
+    shadowColor: '#2979FF', shadowOpacity: 0.8, shadowRadius: 5,
     marginLeft: -4,
   },
   centerIconContainer: {
@@ -872,17 +907,18 @@ const styles = StyleSheet.create({
   },
 
   ctaButton: {
-    height: 48,
-    borderRadius: 24,
-    overflow: 'hidden',
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#1E293B',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     paddingHorizontal: 36,
     alignSelf: 'center',
-    shadowColor: '#8EB3D3', shadowOpacity: 0.35, shadowRadius: 10,
+    shadowColor: '#1E293B', shadowOpacity: 0.15, shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   ctaBtnText: {
     color: '#fff', fontSize: 15, fontWeight: '700',
@@ -890,11 +926,46 @@ const styles = StyleSheet.create({
   },
 
   // ── STAGE 2: SWIPE TUTORIAL STYLES ──────────────────────────────────────
-  tutorialContent: { flex: 1, justifyContent: 'space-between', paddingTop: 60, paddingBottom: 40, paddingHorizontal: 30 },
-  tutorialHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  progressIndicatorLabel: { color: '#64748B', fontSize: 11, fontWeight: '800', letterSpacing: 2, fontFamily: FONT_TITLE },
-  skipBtnText: { color: '#64748B', fontSize: 13, fontWeight: '700', fontFamily: FONT_BODY },
-  
+  tutorialHeaderHover: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 55 : 35,
+    left: 0,
+    right: 0,
+    height: 50,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    zIndex: 100,
+  },
+  backButtonCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(30, 41, 59, 0.1)',
+    shadowColor: '#1E293B',
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  skipButtonPill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(30, 41, 59, 0.1)',
+    shadowColor: '#1E293B',
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
   headerLogoContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -907,13 +978,21 @@ const styles = StyleSheet.create({
     fontFamily: FONT_BODY,
     letterSpacing: 0.5,
   },
+  progressIndicatorLabel: { color: '#64748B', fontSize: 11, fontWeight: '800', letterSpacing: 2, fontFamily: FONT_TITLE },
+  skipBtnText: { color: '#64748B', fontSize: 13, fontWeight: '700', fontFamily: FONT_BODY },
 
-  graphicContainer: {
-    height: 220,
+  slideGraphicWrap: {
+    flex: 1,
     width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  graphicContainer: {
+    flex: 1,
+    width: '100%',
+  },
+  onboardingImage: {
+    width: '100%',
+    height: '100%',
   },
   // Slide 1 deck
   deckCard: {
@@ -980,6 +1059,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#64748B',
     fontFamily: FONT_BODY,
+  },
+  laserLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: '#00E5FF',
+    opacity: 0.8,
+    shadowColor: '#00E5FF',
+    shadowOpacity: 0.9,
+    shadowRadius: 5,
+    elevation: 3,
   },
 
   // Slide 2 feed
@@ -1108,64 +1199,169 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
 
-  slideTextContainer: {
+  bottomWhiteCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
+    paddingHorizontal: 28,
+    paddingTop: 32,
+    paddingBottom: Platform.OS === 'ios' ? 45 : 35,
     width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    marginVertical: 15,
+    shadowColor: '#1E293B',
+    shadowOpacity: 0.08,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 8,
   },
   slideTitleText: {
-    color: '#1E293B', fontSize: 26, fontWeight: '900',
-    fontFamily: FONT_TITLE, marginBottom: 12, letterSpacing: 0.3,
+    color: '#1E293B',
+    fontSize: 24,
+    fontWeight: '900',
+    fontFamily: FONT_TITLE,
+    marginBottom: 12,
     textAlign: 'center',
+    lineHeight: 30,
   },
   slideDescText: {
-    color: '#64748B', fontSize: 14, fontWeight: '500',
-    fontFamily: FONT_BODY, lineHeight: 22,
+    color: '#64748B',
+    fontSize: 14,
+    fontWeight: '500',
+    fontFamily: FONT_BODY,
+    lineHeight: 22,
     textAlign: 'center',
-    paddingHorizontal: 16,
+    marginBottom: 24,
+    paddingHorizontal: 10,
   },
-
-  progressDotsContainer: { flexDirection: 'row', gap: 8, justifyContent: 'center', marginBottom: 20 },
+  progressDotsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 28,
+  },
   indicatorDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#CBD5E1' },
-  indicatorDotActive: { width: 20, backgroundColor: '#8EB3D3' },
+  indicatorDotActive: { width: 20, backgroundColor: '#1E293B' },
 
-  bottomCtaRow: { width: '100%', paddingHorizontal: 4 },
   nextSlideBtnFull: {
     width: '100%',
-    height: 52,
-    borderRadius: 26,
-    overflow: 'hidden',
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#1E293B',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#8EB3D3',
-    shadowOpacity: 0.3,
+    shadowColor: '#1E293B',
+    shadowOpacity: 0.15,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
   },
-  nextSlideBtnTextFull: { color: '#fff', fontSize: 16, fontWeight: '800', fontFamily: FONT_BODY },
+  nextSlideBtnTextFull: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+    fontFamily: FONT_BODY,
+    letterSpacing: 0.5,
+  },
 
-  // ── STAGE 3: PROFILE SETUP STYLES ───────────────────────────────────────
-  registerContainer: { flex: 1, paddingTop: 60 },
-  registerScrollArea: { paddingHorizontal: 28, paddingBottom: 40, alignItems: 'center' },
+  registerContainer: { flex: 1, paddingTop: 0 },
+  registerScrollArea: { paddingHorizontal: 28, paddingBottom: 40, width: '100%', alignItems: 'center' },
   
-  formIntro: { alignItems: 'center', marginBottom: 28 },
+  formIntro: {
+    alignItems: 'center',
+    marginBottom: 20,
+    marginTop: 20,
+  },
   shieldPulseIcon: {
-    width: 68, height: 68,
+    width: 68,
+    height: 68,
     borderRadius: 34,
     overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
-    shadowColor: '#2979FF', shadowOpacity: 0.15, shadowRadius: 8,
+    shadowColor: '#2979FF',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  profileTitleText: { color: '#1E293B', fontSize: 26, fontWeight: '900', fontFamily: FONT_TITLE, marginBottom: 8 },
+  centerIconInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileTitleText: {
+    color: '#1E293B',
+    fontSize: 26,
+    fontWeight: '900',
+    fontFamily: FONT_TITLE,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
   profileSubText: {
-    color: '#64748B', fontSize: 13, fontWeight: '500',
-    fontFamily: FONT_BODY, textAlign: 'center', lineHeight: 18,
-    paddingHorizontal: 10,
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '500',
+    fontFamily: FONT_BODY,
+    textAlign: 'center',
+    lineHeight: 18,
+    paddingHorizontal: 20,
+  },
+  
+  registerHeaderHover: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: Platform.OS === 'ios' ? 55 : 35,
+    paddingBottom: 15,
+    width: '100%',
+    zIndex: 100,
+  },
+  registerHeaderTitle: {
+    color: '#1E293B',
+    fontSize: 20,
+    fontWeight: '900',
+    fontFamily: FONT_TITLE,
+    textAlign: 'center',
+  },
+
+  registerFormWrap: {
+    width: '100%',
+    paddingHorizontal: 4,
+    marginTop: 15,
+  },
+  inputLabelText: {
+    color: '#1E293B',
+    fontSize: 14,
+    fontWeight: '700',
+    fontFamily: FONT_BODY,
+    marginBottom: 8,
+    marginTop: 18,
+  },
+  mockupInputContainer: {
+    width: '100%',
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+    shadowColor: '#1E293B',
+    shadowOpacity: 0.03,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  mockupInputContainerFocused: {
+    borderColor: '#1E293B',
+  },
+  mockupTextInput: {
+    color: '#1E293B',
+    fontSize: 15,
+    fontWeight: '600',
+    fontFamily: FONT_BODY,
   },
 
   roleContainer: {
@@ -1188,8 +1384,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   roleCardActive: {
-    backgroundColor: '#8EB3D3',
-    borderColor: '#8EB3D3',
+    backgroundColor: '#1E293B',
+    borderColor: '#1E293B',
   },
   roleCardText: {
     fontSize: 11,
@@ -1200,49 +1396,55 @@ const styles = StyleSheet.create({
   roleCardTextActive: {
     color: '#FFF',
   },
-
-  formInputCard: {
-    width: '100%', borderRadius: 24, padding: 22,
-    borderWidth: 1, borderColor: '#E2E8F0',
-    backgroundColor: '#FFF',
-    shadowColor: '#94a3b8',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    marginBottom: 28, overflow: 'hidden',
-    elevation: 2,
-  },
-  textLabel: {
-    color: '#64748B', fontSize: 11, fontWeight: '700',
-    fontFamily: FONT_BODY, letterSpacing: 1.2,
-    textTransform: 'uppercase', marginBottom: 8,
-  },
-  formInputContainer: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F8FAFC', borderRadius: 14,
-    borderWidth: 1.5, borderColor: '#E2E8F0',
-    paddingHorizontal: 16, paddingVertical: 14,
-  },
-  formInputContainerFocused: {
-    borderColor: '#2979FF',
-    backgroundColor: '#FFF',
-  },
-  textInput: { flex: 1, color: '#1E293B', fontSize: 15, fontWeight: '600', fontFamily: FONT_BODY },
   
   validationErrorCard: {
-    flexDirection: 'row', alignItems: 'center', marginTop: 16,
-    backgroundColor: 'rgba(255,77,77,0.08)', padding: 10,
-    borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,77,77,0.2)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    backgroundColor: 'rgba(255,77,77,0.08)',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,77,77,0.2)',
   },
   validationErrorText: { color: '#ff4d4d', fontSize: 12, fontWeight: '600', fontFamily: FONT_BODY },
   
-  finishBtn: {
-    width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 18, borderRadius: 20, overflow: 'hidden',
-    shadowColor: '#8EB3D3', shadowOpacity: 0.35, shadowRadius: 12,
+  mockupSubmitBtn: {
+    flex: 1,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#1E293B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#1E293B',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
-  finishBtnText: { color: '#fff', fontSize: 16, fontWeight: '800', fontFamily: FONT_BODY, letterSpacing: 0.5 },
+  mockupSubmitBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+    fontFamily: FONT_BODY,
+    letterSpacing: 0.5,
+  },
+  authActionsWrap: {
+    flexDirection: 'row',
+    width: '100%',
+    marginTop: 35,
+    gap: 12,
+  },
+  mockupSubmitBtnOutline: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: '#1E293B',
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  mockupSubmitBtnTextOutline: {
+    color: '#1E293B',
+  },
 
   // ── STAGE 4: DYNAMIC GREETING STYLES ────────────────────────────────────
   greetingContainer: {
