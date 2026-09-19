@@ -57,7 +57,7 @@ const eucXZ = (a, b) => {
 };
 
 // ── Interpolate chevron positions along path at fixed intervals ─────────────
-const CHEVRON_SPACING = 0.6;
+const CHEVRON_SPACING = 0.8;
 
 const interpolateChevrons = (worldPos) => {
   const chevrons = [];
@@ -107,26 +107,14 @@ const interpolateChevrons = (worldPos) => {
         s.from[2] + s.dz * t
       ];
 
-      // Rule 2: Floor Level Isolation — Hide chevrons on different floors (vertical height diff > 1.6m)
+      // Floor Level Isolation — Allow full vertical stair gradient (up to 3.8m height diff) for continuous stair path
       const dyFromCam = Math.abs(chevPos[1] - _cameraPos[1]);
-      if (dyFromCam > 1.6) {
+      if (dyFromCam > 3.8) {
         distLeft = CHEVRON_SPACING;
         continue;
       }
 
-      // Rule 3: Filter out chevrons that are >0.8m behind camera vector on current segment
-      const cdx = chevPos[0] - _cameraPos[0];
-      const cdz = chevPos[2] - _cameraPos[2];
-      const distFromCam = Math.sqrt(cdx * cdx + cdz * cdz);
-      const dotCam = (cdx * s.dx + cdz * s.dz) / Math.max(0.01, s.segLen);
-
-      if (dotCam >= -0.8 || distFromCam < 1.0) {
-        chevrons.push({
-          pos: chevPos,
-          rotY: curRotY,
-          pitch: curPitch
-        });
-      }
+      chevrons.push({ pos: chevPos, rotY: curRotY, pitch: curPitch });
       distLeft = CHEVRON_SPACING;
     }
     distLeft -= (s.segLen - walked);
@@ -179,7 +167,9 @@ const NavigationRouteScene = ({ sceneNavigator }) => {
   return (
     <ViroARScene 
       onTrackingUpdated={onTrackingUpdated} 
-      onCameraTransformUpdate={(ct) => { _cameraPos = ct.position; }}
+      onCameraTransformUpdate={(ct) => {
+        if (ct && ct.position) _cameraPos = ct.position;
+      }}
     >
       <ViroDirectionalLight color="#ffffff" direction={[0, -1, 0]} />
 
@@ -240,8 +230,14 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
   const [legMeters, setLegMeters]       = useState(null);
   const [nextNodeName, setNextNodeName] = useState('');
   const [relocStatus, setRelocStatus]   = useState('');
+  const [isWrongTurn, setIsWrongTurn]   = useState(false);
   const [showSummaryModal, setShowModal] = useState(false);
   const [totalRouteDistance, setTotalDistance] = useState('0.0');
+
+  const prevDistRef     = useRef('');
+  const prevLegRef      = useRef('');
+  const prevNextNameRef = useRef('');
+
   const pulseAnim  = useRef(new Animated.Value(1)).current;
   const relocOpacity = useRef(new Animated.Value(0)).current;
 
@@ -362,8 +358,15 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
           (_cameraPos[2] - nLegWorld[2]) ** 2
         );
         currentLegDist = legD;
-        setLegMeters(legD < 0.4 ? '0.0' : legD.toFixed(1));
-        setNextNodeName(targetNext.name);
+        const newLeg = legD < 0.4 ? '0.0' : legD.toFixed(1);
+        if (prevLegRef.current !== newLeg) {
+          prevLegRef.current = newLeg;
+          setLegMeters(newLeg);
+        }
+        if (prevNextNameRef.current !== targetNext.name) {
+          prevNextNameRef.current = targetNext.name;
+          setNextNodeName(targetNext.name);
+        }
       }
 
       // 4. Calculate total real-time remaining walking distance along actual route path
@@ -375,27 +378,29 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
         );
       }
       
-      setDistMeters(remainingDist < 0.4 ? '0.0' : remainingDist.toFixed(1));
+      const newDist = remainingDist < 0.4 ? '0.0' : remainingDist.toFixed(1);
+      if (prevDistRef.current !== newDist) {
+        prevDistRef.current = newDist;
+        setDistMeters(newDist);
+      }
 
-      if (!warmupDone) return;
-
-      // 5. Arrival check: ONLY when user reaches the FINAL destination node on the CORRECT FLOOR (fdistY < 1.0m)
-      const isFinalNode = nearestIdx === _routeNodes.length - 1;
+      // 5. Arrival check: Triggers reliably whenever user camera is within 2.5m of destination node
       const fdx_cam = _cameraPos[0] - destWorld[0];
       const fdy_cam = _cameraPos[1] - destWorld[1];
       const fdz_cam = _cameraPos[2] - destWorld[2];
       const fdistXZ = Math.sqrt(fdx_cam * fdx_cam + fdz_cam * fdz_cam);
       const fdistY = Math.abs(fdy_cam);
 
-      if (!arrivedRef.current && isFinalNode && fdistXZ < 1.6 && fdistY < 1.0) {
+      if (!arrivedRef.current && (fdistXZ < 2.5 || remainingDist <= 1.8) && fdistY < 2.0) {
         arrivedRef.current = true;
+        setIsWrongTurn(false);
         setDistMeters('0.0');
         setLegMeters('0.0');
         Speech.speak(`You have reached ${finalDest?.name || 'your destination'}.`, { language: 'en-US', rate: 0.92, pitch: 1.1 });
         setShowModal(true);
       }
 
-      // 4. Intermediate node proximity voice announcements
+      // 6. Intermediate node proximity voice announcements
       _routeNodes.forEach((node, i) => {
         if (i === 0) return;
         const ndx = node.x - _originOffset[0];
@@ -422,47 +427,43 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
         }
       });
 
-      // 5. High-precision Wrong-Turn Engine (Triggers if user strays >1.8m off course or overshoots turn)
-      const now = Date.now();
-      if (now - lastRerouteTs.current > 1500) {
-        let minSegmentDist = Infinity;
-        for (let i = 0; i < _routeNodes.length - 1; i++) {
-          const nA = _routeNodes[i], nB = _routeNodes[i + 1];
-          const ax = (nA.x - _originOffset[0]) * cosA - (nA.z - _originOffset[2]) * sinA;
-          const az = (nA.x - _originOffset[0]) * sinA + (nA.z - _originOffset[2]) * cosA;
-          const bx = (nB.x - _originOffset[0]) * cosA - (nB.z - _originOffset[2]) * sinA;
-          const bz = (nB.x - _originOffset[0]) * sinA + (nB.z - _originOffset[2]) * cosA;
+      // 7. High-precision Wrong-Turn Engine (Triggers if user strays >2.0m off course)
+      let minSegmentDist = Infinity;
+      for (let i = 0; i < _routeNodes.length - 1; i++) {
+        const nA = _routeNodes[i], nB = _routeNodes[i + 1];
+        const ax = (nA.x - _originOffset[0]) * cosA - (nA.z - _originOffset[2]) * sinA;
+        const az = (nA.x - _originOffset[0]) * sinA + (nA.z - _originOffset[2]) * cosA;
+        const bx = (nB.x - _originOffset[0]) * cosA - (nB.z - _originOffset[2]) * sinA;
+        const bz = (nB.x - _originOffset[0]) * sinA + (nB.z - _originOffset[2]) * cosA;
 
-          const vx = bx - ax, vz = bz - az;
-          const lenSq = vx * vx + vz * vz;
-          if (lenSq < 0.01) continue;
+        const vx = bx - ax, vz = bz - az;
+        const lenSq = vx * vx + vz * vz;
+        if (lenSq < 0.01) continue;
 
-          const wx = _cameraPos[0] - ax, wz = _cameraPos[2] - az;
-          // Correct 2D dot product: (W . V) = wx * vx + wz * vz
-          const t = Math.max(0, Math.min(1, (wx * vx + wz * vz) / lenSq));
-          const projX = ax + t * vx, projZ = az + t * vz;
-          const segD = Math.sqrt((_cameraPos[0] - projX) ** 2 + (_cameraPos[2] - projZ) ** 2);
-          if (segD < minSegmentDist) minSegmentDist = segD;
-        }
+        const wx = _cameraPos[0] - ax, wz = _cameraPos[2] - az;
+        const t = Math.max(0, Math.min(1, (wx * vx + wz * vz) / lenSq));
+        const projX = ax + t * vx, projZ = az + t * vz;
+        const segD = Math.sqrt((_cameraPos[0] - projX) ** 2 + (_cameraPos[2] - projZ) ** 2);
+        if (segD < minSegmentDist) minSegmentDist = segD;
+      }
 
-        // Alert user if they walk >2.0m off route (AR chevrons remain anchored on the floor)
-        if (minSegmentDist > 2.0) {
+      // Evaluator-requested Wrong Turn Pop-up Card logic:
+      if (minSegmentDist > 2.0) {
+        setIsWrongTurn(true);
+        const now = Date.now();
+        if (now - lastRerouteTs.current > 3500) {
           lastRerouteTs.current = now;
           Speech.stop();
           Speech.speak(`Wrong turn detected. Please turn back towards ${finalDest?.name || 'your path'}.`, { language: 'en-US', rate: 0.92 });
-          setRelocStatus(`⚠️ Wrong Turn! Turn back towards ${finalDest?.name || 'your path'}`);
-          Animated.sequence([
-            Animated.timing(relocOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
-            Animated.delay(3500),
-            Animated.timing(relocOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
-          ]).start(() => setRelocStatus(''));
         }
+      } else {
+        // Automatically dismisses popup as soon as user returns to path (<= 2.0m)
+        setIsWrongTurn(false);
       }
-    }, 300);
+    }, 400);
 
-    // Start passive re-localization loop
-    relocRunning.current = true;
-    relocLoop();
+    // Disable continuous background screen capture loop to guarantee 60 FPS smooth AR rendering
+    relocRunning.current = false;
 
     return () => {
       clearInterval(distIv);
@@ -629,6 +630,23 @@ export default function ARNavigationScreen({ routeNodes, anchorNode, onStop, onR
         </View>
       )}
 
+      {/* ── EVALUATOR-REQUESTED WRONG TURN POP-UP ALERT CARD ── */}
+      {isWrongTurn && !showSummaryModal && (
+        <View style={styles.wrongTurnOverlay} pointerEvents="none">
+          <View style={styles.wrongTurnCard}>
+            <View style={styles.wrongTurnIconWrap}>
+              <Ionicons name="close-circle-sharp" size={48} color="#ff3b30" />
+            </View>
+            <Text style={styles.wrongTurnTitle}>WRONG TURN DETECTED!</Text>
+            <Text style={styles.wrongTurnSub}>Please turn back towards your path</Text>
+            <View style={styles.wrongTurnPill}>
+              <Ionicons name="warning-outline" size={14} color="#ff3b30" style={{ marginRight: 4 }} />
+              <Text style={styles.wrongTurnPillTxt}>{"Off Course > 2.0m"}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* ── Stop & Re-align Pill Buttons ── */}
       <View style={styles.stopWrap}>
         <TouchableOpacity style={styles.alignBtn} onPress={handleRealign} activeOpacity={0.8}>
@@ -763,6 +781,33 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,77,77,0.45)',
   },
   stopTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  // ── Evaluator-Requested Wrong Turn Pop-up Card ──────────────────────
+  wrongTurnOverlay: {
+    position: 'absolute', top: '32%', left: 24, right: 24,
+    alignItems: 'center', justifyContent: 'center', zIndex: 999,
+  },
+  wrongTurnCard: {
+    width: '100%', backgroundColor: 'rgba(15, 7, 24, 0.94)',
+    borderRadius: 24, padding: 22, alignItems: 'center',
+    borderWidth: 2, borderColor: '#ff3b30',
+    shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.6, shadowRadius: 16, elevation: 12,
+  },
+  wrongTurnIconWrap: {
+    width: 64, height: 64, borderRadius: 32,
+    backgroundColor: 'rgba(255, 59, 48, 0.15)',
+    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+    borderWidth: 1, borderColor: 'rgba(255, 59, 48, 0.4)',
+  },
+  wrongTurnTitle: { color: '#ff3b30', fontSize: 18, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
+  wrongTurnSub:   { color: '#f8fafc', fontSize: 13, fontWeight: '600', textAlign: 'center', marginBottom: 12 },
+  wrongTurnPill:  {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(255, 59, 48, 0.18)',
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12,
+  },
+  wrongTurnPillTxt: { color: '#ff6b6b', fontSize: 11, fontWeight: '800' },
 
   // ── Destination Modal ────────────────────────────────────────────────────
   modalOverlay: {

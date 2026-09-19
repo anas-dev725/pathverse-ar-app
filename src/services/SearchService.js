@@ -27,36 +27,66 @@ export const fuzzySearchRooms = (query, nodes) => {
   });
 };
 
+// Helper: Extract meaningful words (>2 chars, excluding stop words)
+const tokenize = (str) => {
+  const stopWords = new Set(['of', 'the', 'and', 'for', 'to', 'in', 'at', 'on']);
+  return (str || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !stopWords.has(w));
+};
+
 /**
  * Used by OCR — searches ALL node types (room, corridor, stairs, exit)
- * because any labeled sign is a valid anchor.
- * Also handles split OCR lines like ["IT", "301"] → "IT301" matching "IT-301 Lab".
+ * using tokenized word matching, stemming, and number sequence matching.
  */
 export const ocrSearchNodes = (rawText, nodes) => {
   if (!rawText || !nodes?.length) return [];
 
-  // Normalize OCR text — merge all lines into one normalized string
-  const q = normalize(rawText);
-  if (q.length < 2) return []; // ignore single-char detections
+  const qNorm = normalize(rawText);
+  if (qNorm.length < 2) return [];
+
+  const qTokens = tokenize(rawText);
 
   return nodes
     .map(node => {
-      const name = normalize(node.name);
+      const nameNorm = normalize(node.name);
+      const nodeTokens = tokenize(node.name);
       let score = 0;
 
-      // Exact substring match (strongest signal)
-      if (name.includes(q) || q.includes(name)) score += 10;
+      // 1. Direct full string inclusion (strongest signal)
+      if (nameNorm.includes(qNorm) || qNorm.includes(nameNorm)) {
+        score += 25;
+      }
 
-      // Partial prefix match (e.g., "IT3" matches "IT301Lab")
-      if (name.startsWith(q.slice(0, 3)) && q.length >= 3) score += 5;
+      // 2. Word Token & Stemming overlap matching (e.g. "scholarships" ↔ "scholarship", "registrar" ↔ "registrar")
+      let matchedTokens = 0;
+      qTokens.forEach(qt => {
+        nodeTokens.forEach(nt => {
+          // Exact token match or stem match (>=4 chars)
+          if (qt === nt || (qt.length >= 4 && (qt.startsWith(nt) || nt.startsWith(qt)))) {
+            matchedTokens++;
+            score += 15;
+          } else if (qt.length >= 4 && nt.length >= 4 && (qt.includes(nt) || nt.includes(qt))) {
+            score += 8;
+          }
+        });
+      });
 
-      // Number match — if both contain the same digit sequence
+      if (matchedTokens > 0) {
+        score += matchedTokens * 5;
+      }
+
+      // 3. Room Number matching (e.g. "204" in "Room 204")
       const nameNums = (node.name.match(/\d+/g) || []).join('');
       const qNums    = (rawText.match(/\d+/g) || []).join('');
-      if (qNums.length >= 2 && nameNums.includes(qNums)) score += 8;
+      if (qNums.length >= 2 && nameNums.includes(qNums)) {
+        score += 25;
+      }
 
       return { ...node, score };
     })
-    .filter(n => n.score > 0)
+    .filter(n => n.score >= 12)
     .sort((a, b) => b.score - a.score);
 };

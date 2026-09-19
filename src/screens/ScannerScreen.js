@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, Dimensions,
-  Animated, TextInput, KeyboardAvoidingView, Platform, ScrollView
+  Animated, TextInput, KeyboardAvoidingView, Platform, ScrollView, Keyboard
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -163,7 +163,7 @@ export default function ScannerScreen({ onAnchorFound, onCancel, preselectedDest
 
       addOCRLog(persistentUri, rawText, '');
     } catch (e) {
-      console.error("Scanner OCR loop error:", e);
+      console.log("Scanner OCR loop silent retry:", e);
       if (persistentUri) addOCRLog(persistentUri, rawText, '');
     }
 
@@ -330,7 +330,8 @@ export default function ScannerScreen({ onAnchorFound, onCancel, preselectedDest
       {/* ── DESTINATION SEARCH PANEL (phase 2 & Manual Start) ── */}
       {(phase === 'SELECTING' || phase === 'MANUAL_START') && (
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
           style={styles.searchKAV}
         >
           <Animated.View style={[styles.searchPanel, { opacity: searchOp, transform: [{ translateY: searchSlide }] }]}>
@@ -507,13 +508,29 @@ const styles = StyleSheet.create({
   successSub:   { color: 'rgba(255,255,255,0.6)', fontSize: 15, fontWeight: '600' },
 
   // Search panel
-  searchKAV:    { position: 'absolute', bottom: 0, left: 0, right: 0 },
-  searchPanel:  {
+  searchKAV: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    justifyContent: 'flex-end',
+    zIndex: 999,
+  },
+  searchPanel: {
     backgroundColor: '#0c1a30',
-    borderTopLeftRadius: 32, borderTopRightRadius: 32,
-    paddingTop: 14, paddingHorizontal: 22, paddingBottom: 44,
-    borderTopWidth: 1, borderColor: 'rgba(77,184,255,0.18)',
-    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    paddingTop: 14,
+    paddingHorizontal: 22,
+    paddingBottom: Platform.OS === 'ios' ? 32 : 20,
+    maxHeight: H * 0.85,
+    borderTopWidth: 1,
+    borderColor: 'rgba(77,184,255,0.18)',
+    shadowColor: '#000',
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 20,
   },
   panelHandle: {
     width: 40, height: 4, borderRadius: 2,
@@ -531,7 +548,7 @@ const styles = StyleSheet.create({
     marginBottom: 16, borderWidth: 1, borderColor: 'rgba(77,184,255,0.2)',
   },
   searchInput: { flex: 1, color: '#fff', fontSize: 15, fontWeight: '500' },
-  resultList:  { maxHeight: 260 },
+  resultList:  { maxHeight: H * 0.32 },
   resultItem: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingVertical: 14,
