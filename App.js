@@ -198,7 +198,7 @@ export default function App() {
           )}
 
           {activeTab === 'SETTINGS' && (
-            profile?.email === 'anasmobin0@gmail.com' ? (
+            profile?.email?.trim()?.toLowerCase() === 'anasmobin0@gmail.com' ? (
               <DBViewerScreen
                 onBack={() => setActiveTab('NAVIGATE')}
                 onOpenMapper={() => setScreen('AR_MAPPER')}
