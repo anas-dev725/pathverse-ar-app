@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet, View, Text, ScrollView, TouchableOpacity,
-  TextInput, KeyboardAvoidingView, Platform, Alert, InteractionManager, ActivityIndicator
+  TextInput, KeyboardAvoidingView, Platform, Alert, InteractionManager, ActivityIndicator, Clipboard
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -90,6 +90,47 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
     return `${a?.name ?? edge.node1_id}  ↔  ${b?.name ?? edge.node2_id}  (${parseFloat(edge.distance).toFixed(1)} m)`;
   };
 
+  const handleExportSeedData = () => {
+    if (!nodes || nodes.length === 0) {
+      Alert.alert('No Nodes', 'There are no location nodes in your database to export.');
+      return;
+    }
+    const formattedNodes = nodes.map(n => ({
+      id: n.id,
+      name: n.name,
+      x: parseFloat(Number(n.x).toFixed(2)),
+      y: parseFloat(Number(n.y).toFixed(2)),
+      z: parseFloat(Number(n.z).toFixed(2)),
+      type: n.type
+    }));
+
+    const formattedEdges = edges.map(e => ({
+      a: e.node1_id,
+      b: e.node2_id,
+      d: parseFloat(parseFloat(e.distance).toFixed(2))
+    }));
+
+    const exportText = `// ── MAPPED NODES (${formattedNodes.length}) ──\n` +
+      JSON.stringify(formattedNodes, null, 2) +
+      `\n\n// ── MAPPED EDGES (${formattedEdges.length}) ──\n` +
+      JSON.stringify(formattedEdges, null, 2);
+
+    try {
+      if (Platform.OS === 'web' && navigator?.clipboard) {
+        navigator.clipboard.writeText(exportText);
+      } else {
+        Clipboard.setString(exportText);
+      }
+      Alert.alert(
+        '📋 Seed Code Copied!',
+        `Successfully copied ${formattedNodes.length} mapped nodes & ${formattedEdges.length} edges to your clipboard!\n\nPaste it into our chat to permanently sync them to GitHub.`,
+        [{ text: 'OK' }]
+      );
+    } catch (e) {
+      Alert.alert('Export Error', 'Could not copy to clipboard. Total nodes: ' + formattedNodes.length);
+    }
+  };
+
   return (
     <LinearGradient colors={['#020818', '#071428', '#0a1e3a']} style={styles.root}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
@@ -103,10 +144,15 @@ export default function DBViewerScreen({ onBack, onOpenMapper, onOpenOCRLog }) {
             </View>
           </View>
 
-          {/* AR Mapper button */}
+          {/* Action Buttons Row */}
           <TouchableOpacity style={styles.mapperBtn} onPress={onOpenMapper}>
             <Ionicons name="navigate-circle-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.mapperBtnTxt}>Boot Live AR Root Mapper</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.exportBtn} onPress={handleExportSeedData}>
+            <Ionicons name="copy-outline" size={18} color="#2ecc71" style={{ marginRight: 8 }} />
+            <Text style={styles.exportBtnTxt}>📋 Copy Seed Code for GitHub</Text>
           </TouchableOpacity>
 
           {/* Database Stats Dashboard Grid */}
@@ -298,8 +344,10 @@ const styles = StyleSheet.create({
   title: { color: '#fff', fontSize: 28, fontWeight: '900' },
   closeBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
 
-  mapperBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#4db8ff', padding: 16, borderRadius: 16, marginBottom: 24, elevation: 4, shadowColor: '#4db8ff', shadowOpacity: 0.4, shadowRadius: 10 },
+  mapperBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#4db8ff', padding: 16, borderRadius: 16, marginBottom: 12, elevation: 4, shadowColor: '#4db8ff', shadowOpacity: 0.4, shadowRadius: 10 },
   mapperBtnTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  exportBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(46, 204, 113, 0.12)', padding: 14, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: 'rgba(46, 204, 113, 0.4)' },
+  exportBtnTxt: { color: '#2ecc71', fontWeight: '800', fontSize: 14 },
 
   section: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 20, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
